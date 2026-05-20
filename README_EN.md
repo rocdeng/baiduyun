@@ -1,7 +1,7 @@
 <p align="center">
-  <a href="https://www.youxiaohou.com">
+  <span>
     <img width="100" height="100" src="https://www.youxiaohou.com/logo.png">
-  </a>
+  </span>
 </p>
 
 <h1 align="center">Netdisk Direct Download Helper</h1>
@@ -18,25 +18,15 @@
 
 <div align="center">
   <h3>
-    <a href="https://www.youxiaohou.com">
-      Website
-    </a>
+    <span>Website</span>
     <span> | </span>
-    <a href="https://www.youxiaohou.com/install.html">
-      Features
-    </a>
+    <span>Features</span>
     <span> | </span>
-    <a href="https://www.youxiaohou.com/panlinker.user.js">
-      Downloads
-    </a>
+    <span>Downloads</span>
     <span> | </span>
-    <a href="https://www.youxiaohou.com/download.html">
-      Software
-    </a>
+    <span>Software</span>
     <span> | </span>
-    <a href="https://www.youxiaohou.com/zh-cn/question.html">
-      Q&A
-    </a>
+    <span>Q&A</span>
     <span> | </span>
     <a href="https://github.com/syhyz1990/baiduyun/issues">
       Issues
@@ -53,7 +43,7 @@
 
 **[Netdisk Direct Download Helper]** is suitable for browsers that support the installation of Tampermonkey or Violent Monkey extensions on multiple platforms, such as Chrome, 360, QQ, UC, etc.
 
-Support Baidu Netdisk and Aliyun NetDisk web page. After installation, a `Download Helper` button will appear on the corresponding interface, which can be used with multi-threaded download tools to achieve speed-up.
+Support Baidu Netdisk web page. After installation, a `Download Helper` button will appear on the corresponding interface, which can be used with multi-threaded download tools to achieve speed-up.
 
 ## 🎨 Interface
 
@@ -61,24 +51,24 @@ Support Baidu Netdisk and Aliyun NetDisk web page. After installation, a `Downlo
 
 ## 📖 Tutorial
 
-- [Windows](https://www.youxiaohou.com/zh-cn/windows/)
+- Windows
 
-- [MacOS](https://www.youxiaohou.com/zh-cn/mac/)
+- MacOS
 
-- [Linux](https://www.youxiaohou.com/zh-cn/linux/)
+- Linux
 
 ## 💽 Install
 
 Please make sure you have installed [Tampermonkey](http://pan.youxiaohou.com/down)
 
-- [Install](https://www.youxiaohou.com/install.html)
+- Install
 
 ## ✨ Features
 
 - ✅ Support multiple operating systems: Windows, Linux, Mac
 - ✅ Support multiple download protocols: HTTP, JSON-RPC, cURL
 - ✅ Support multiple downloaders: IDM, XDown, Aria2, NDM, Motrix, terminal
-- ✅ Support a small number of file download links to obtain Baidu Netdisk and Alibaba Cloud Disk
+- ✅ Support a small number of file download links to obtain Baidu Netdisk
 - ✅ The download link can be sent to local or remote download via JSON-RPC protocol
 - ✅ Support skin replacement, automatic update, new version of the network disk interface
 
@@ -100,4 +90,4 @@ Speed test of SVIP using different download software:
 
 ## 👻 Notes
 
-Folders are not supported, you can select files to download in batches, please refer to [FAQ](https://www.youxiaohou.com/zh-cn/question.html)
+Folders are not supported, you can select files to download in batches, please refer to FAQ
