@@ -1,81 +1,64 @@
-<p align="center">
-  <span title="点击访问">
-    <img width="100" height="100" src="https://www.youxiaohou.com/logo.gif" alt="网盘直链下载助手">
-  </span>
-</p>
+# 网盘直链下载助手NG
 
-<h1 align="center">网盘直链下载助手</h1>
+一个面向百度网盘网页端的油猴脚本，用于生成百度网盘文件的直链下载命令。当前版本号：`1.0`。
 
-<p align="center">
-  <img src="https://img.shields.io/badge/TamperMonkey-v4.13-brightgreen.svg?style=flat-square" alt="tampermonkey">
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-AGPLv3.0-lightgrey.svg?style=flat-square" alt="LICENSE">
-  </a>
-  <img src="https://img.shields.io/badge/Chrome-≥76.0-brightgreen.svg?style=flat-square" alt="chrome">
-  <img src="https://img.shields.io/badge/Edge-≥88.0-brightgreen.svg?style=flat-square" alt="edge">
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Mac%20%7C%20Linux-blue.svg?style=flat-square" alt="platform">
-</p>
+## 当前版本定位
 
-<div align="center">
-  <h3>
-    <span>使用说明</span>
-    <span> | </span>
-    <span>安装地址</span>
-    <span> | </span>
-    <span>相关软件</span>
-    <span> | </span>
-    <span>常见问题</span>
-    <span> | </span>
-    <a href="https://github.com/syhyz1990/baiduyun/issues">
-      提交Bug
-    </a>
-  </h3>
-</div>
+| 项目 | 说明 |
+|---|---|
+| 支持网盘 | 仅保留百度网盘 |
+| 主下载方式 | 生成 `aria2c` 命令并自动复制到剪切板 |
+| 辅助方式 | 保留 JSON-RPC、cURL、比特彗星相关生成逻辑 |
+| 不再支持 | 已移除阿里云相关逻辑，不再调用 IDM 等外部下载器 |
+| 远程配置 | 已移除 `api.youxiaohou.com` 远程下发配置，必要配置改为本地常量和本地存储 |
+| 外部说明页 | 已清理 `www.youxiaohou.com` 引导、说明类超链 |
 
-<div align="center">
-  <strong>👉 一个免费开源的网盘下载助手 👈</strong><br>
-  <sub>适用于 Linux，macOS，Windows 平台</sub>
-</div>
-<br>
+## 主要改动
 
-[中文文档](README.md) | [English Docs](README_EN.md)
+| 模块 | 改动 |
+|---|---|
+| 安全清理 | 移除远程配置接口，减少脚本启动时对第三方服务器的依赖 |
+| 配置方式 | 百度 OAuth `client_id/appkey` 改为本地设置项，可填写自己的百度应用 AppKey |
+| 下载链路 | Aria 下载生成成功后自动复制完整 `aria2c` 命令 |
+| 原生接管 | 接管百度网盘文件行自带的“下载”按钮，点击后走 Aria 生成流程 |
+| 文件选择 | 点击文件行下载时自动选中该文件，复制成功后自动取消选中 |
+| 界面优化 | 主弹窗、设置框、提示框、文件列表按 Ant Design 风格重新整理 |
+| 页面清理 | 自动隐藏并移除百度网盘页面上的 `.wp-custom-yunyiduo` 浮层 |
+| 名称图标 | 脚本名称改为“网盘直链下载助手NG”，并内置新的 data URI SVG 图标 |
 
-【网盘直链下载助手】是一款免费开源**获取百度网盘文件真实下载地址**的油猴脚本，基于 PCSAPI，支持 Windows，Mac，Linux 等多平台，支持 IDM，XDown，Aria2 等多线程下载工具，支持 JSON-RPC 协议远程下载，支持 cURL 命令下载。
+## 使用方式
 
-**建议配合网盘超级会员使用**
+| 操作 | 说明 |
+|---|---|
+| 单文件下载 | 鼠标移到文件行，点击百度网盘原生“下载”图标 |
+| 批量生成 | 勾选多个文件后，使用顶部“下载助手”菜单里的 Aria 下载 |
+| Aria 使用 | 脚本会复制完整 `aria2c "直链" --out "文件名" --header ...` 命令，粘贴到终端执行即可 |
+| 文件夹 | 文件夹不能直接生成 Aria 链接，需要进入文件夹后选择具体文件 |
+| AppKey | 在助手设置里填写自己的百度应用 AppKey 后，再按提示完成 OAuth 授权 |
 
-当前版本仅保留百度网盘支持。
+## 安全说明
 
-## 📖 使用教程
+| 项目 | 说明 |
+|---|---|
+| 百度接口 | 直链生成使用百度官方域名接口，包括 `pan.baidu.com` 与 `openapi.baidu.com` |
+| BDUSS | 生成 Aria 命令时会读取本机浏览器中的 `BDUSS`，并作为 `Cookie` 请求头写入命令 |
+| Access Token | OAuth 授权后得到的 `access_token` 会保存在本地脚本存储中 |
+| 第三方远程 | 已去除启动时必须访问第三方配置服务器的逻辑 |
+| 命令风险 | 复制出的命令包含下载链接、文件名、BDUSS，请不要发给他人 |
 
-- **Windows平台使用教程**
+## 依赖
 
-- **MacOS平台使用教程**
+| 项目 | 说明 |
+|---|---|
+| 脚本管理器 | Tampermonkey |
+| 浏览器 | Chrome、Edge 等支持 Tampermonkey 的现代浏览器 |
+| 下载工具 | 推荐本地安装 `aria2c` |
 
-- **Linux平台使用教程**
+## 注意事项
 
-## 🔧 插件功能
+| 场景 | 说明 |
+|---|---|
+| 浏览器直接下载 | 百度直链在浏览器中直接访问可能返回未授权，当前推荐使用 Aria 命令 |
+| 会员速度 | 下载速度仍受百度账号、会员状态、网络环境和 Aria 配置影响 |
+| 页面结构变更 | 百度网盘网页 DOM 变化后，原生下载按钮接管可能需要跟进适配 |
 
-- ✅ 支持百度网盘
-- ✅ 支持多种操作系统：Windows，Linux，Mac
-- ✅ 支持多种下载协议：HTTP，JSON-RPC，cURL
-- ✅ 支持多种下载器：IDM，XDown，Aria2，NDM，Motrix，终端
-- ✅ 支持批量获取百度网盘文件下载链接
-- ✅ 可以通过 JSON-RPC 协议发送下载链接至本地或远程下载
-- ✅ 支持更换皮肤，自动更新，新版网盘界面
-
-## 💽 安装助手
-
-请确保已先安装 [Tampermonkey](https://www.crxsoso.com/webstore/detail/dhdgffkkebhmkfjojejmpbldmpobfkfo) 脚本管理器
-
-- **安装地址（推荐）**
-
-## 🎨 助手界面
-
-|  百度网盘 |
-|:---:|
-| ![](https://pic.rmb.bdstatic.com/bjh/32b2bead4b1c7fc806eacfde29b78f975055.gif)  |
-
-## 📝 更新日志
-
-- 点击查看更新日志

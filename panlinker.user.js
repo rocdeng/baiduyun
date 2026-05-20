@@ -41,6 +41,9 @@
 
     let pt = '', selectList = [], params = {}, mode = '', width = 800, pan = {}, color = '',
         doc = $(document), progress = {}, request = {}, ins = {}, idm = {},
+        nativeDownloadBusy = false,
+        nativeDownloadRow = null,
+        yunyiduoTimer = null,
         pageListenersReady = false, tipReady = false, menuCommandReady = false;
     const scriptInfo = GM_info.script;
     const version = scriptInfo.version;
@@ -556,6 +559,15 @@
             checkElement();
         },
 
+        removeYunyiduo() {
+            // 云一朵输入框外层容器：百度网盘动态挂载的 AI/知识搜索入口。
+            document.querySelectorAll('.wp-custom-input-wrap, .wp-custom-yunyiduo').forEach((node) => node.remove());
+            // 底部云一朵聊天区：iframe 形式的知识搜索入口。
+            document.querySelectorAll('.bottom-chat-ai-wrapper, .nd-ai-tools-iframe').forEach((node) => node.remove());
+            // 云一朵引导态标记，避免页面再次进入该引导分支。
+            document.querySelectorAll('.yunyiduo-guide-show').forEach((node) => node.classList.remove('yunyiduo-guide-show'));
+        },
+
         addPanLinkerStyle() {
             color = base.getValue('setting_theme_color');
             let css = `
@@ -648,6 +660,12 @@
             .swal2-container { z-index:100000!important; }
             body.swal2-height-auto { height: inherit!important; }
             .btn-operate .btn-main { display:flex; align-items:center; }
+            /* 云一朵/AI助手入口：保留注释，便于后续恢复。 */
+            .wp-custom-input-wrap,
+            .wp-custom-yunyiduo,
+            .bottom-chat-ai-wrapper,
+            .nd-ai-tools-iframe,
+            .wp-s-core-pan.yunyiduo-guide-show { display: none !important; }
             `;
             this.addStyle('panlinker-style', 'style', css);
         },
@@ -942,10 +960,46 @@
                     e.stopPropagation();
                 }
             }, true);
+            const handleNativeDownload = async (e) => {
+                if (nativeDownloadBusy) return;
+                if (e.__plNativeDownloadHandled) return;
+                e.__plNativeDownloadHandled = true;
+                const row = e.target.closest && e.target.closest('tr.wp-s-pan-table__body-row, tr[data-id]');
+                if (!row) return;
+                const downloadBtn = e.target.closest && e.target.closest('button[title="下载"], .wp-s-agile-tool-bar__h-action-button');
+                const icon = downloadBtn && (downloadBtn.matches && downloadBtn.matches('i.u-icon-download') ? downloadBtn : downloadBtn.querySelector && downloadBtn.querySelector('i.u-icon-download'));
+                if (!icon || !row.contains(icon) || icon.closest('.pl-button')) return;
+                e.preventDefault();
+                e.stopPropagation();
+                e.stopImmediatePropagation();
+                if (e.type !== 'click') return;
+                const fileItem = this.getFileItemFromRowDom(icon);
+                if (!fileItem) {
+                    message.error('提示：已拦截网盘下载，但未能识别该文件信息，请刷新后重试！');
+                    return;
+                }
+                this.trySelectRowFromDom(icon);
+                if (+fileItem.isdir === 1) {
+                    message.warning('提示：文件夹不能直接生成 Aria 链接！');
+                    return;
+                }
+                mode = 'aria';
+                nativeDownloadRow = row;
+                nativeDownloadBusy = true;
+                try {
+                    await this.getPCSLink(1, [fileItem]);
+                } finally {
+                    setTimeout(() => {
+                        nativeDownloadBusy = false;
+                    }, 300);
+                }
+            };
+            document.addEventListener('click', handleNativeDownload, true);
         },
 
         addButton() {
             if (!pt) return;
+            this.addPageListener();
             let $toolWrap;
             let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
@@ -956,7 +1010,6 @@
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
             if (!$toolWrap.length || $toolWrap.children('.pl-button').length) return;
             $toolWrap.prepend($button);
-            this.addPageListener();
         },
 
         async getToken() {
@@ -1020,8 +1073,8 @@
             return accessToken;
         },
 
-        async getPCSLink(maxRequestTime = 1) {
-            selectList = this.getSelectedList();
+        async getPCSLink(maxRequestTime = 1, customList = null) {
+            selectList = customList || this.getSelectedList();
             let fidList = this._getFidList(), url, res;
 
             if (pt === 'home' || pt === 'main') {
@@ -1222,6 +1275,117 @@
             }
         },
 
+        getCurrentFileList() {
+            try {
+                return require('system-core:context/context.js').instanceForSystem.list.listData || [];
+            } catch (e) {
+                try {
+                    return document.querySelector('.wp-s-core-pan').__vue__.fileList || [];
+                } catch (err) {
+                    return [];
+                }
+            }
+        },
+
+        getFileItemFromRowDom(dom) {
+            const row = dom.closest && dom.closest('tr.wp-s-pan-table__body-row, tr[data-id]');
+            const fileId = row?.dataset?.id || '';
+            const list = this.getCurrentFileList();
+            const byId = list.find(v => String(v.fs_id) === String(fileId));
+            if (byId) return byId;
+
+            const nameNode = row?.querySelector?.('.wp-s-pan-list__file-name-title-text');
+            const fileName = (nameNode?.innerText || '').trim().replace(/\s+/g, ' ');
+            if (fileName) {
+                const byName = list.find(v => {
+                    const name = (v.server_filename || v.filename || '').trim().replace(/\s+/g, ' ');
+                    return name && name === fileName;
+                });
+                if (byName) return byName;
+            }
+            return null;
+        },
+
+        getRowCheckboxFromDom(dom) {
+            const row = dom.closest && (dom.closest('.wp-s-pan-list__item, .wp-s-pan-list__row, .wp-s-pan-list__cell, li, tr, [role="row"]') || dom.parentElement);
+            if (!row) return null;
+            return row.querySelector('input[type="checkbox"], .wp-s-pan-list__checkbox, .u-checkbox, .check-box, [role="checkbox"]');
+        },
+
+        trySelectRowFromDom(dom) {
+            const checkbox = this.getRowCheckboxFromDom(dom);
+            if (!checkbox) return false;
+            const checked = checkbox.getAttribute('aria-checked') === 'true' || checkbox.classList.contains('is-checked') || checkbox.checked;
+            if (!checked) {
+                checkbox.click();
+            }
+            return true;
+        },
+
+        tryUnselectRowFromDom(dom) {
+            const checkbox = this.getRowCheckboxFromDom(dom);
+            if (!checkbox) return false;
+            const checked = checkbox.getAttribute('aria-checked') === 'true' || checkbox.classList.contains('is-checked') || checkbox.checked;
+            if (checked) {
+                checkbox.click();
+            }
+            return true;
+        },
+
+        resolveFileItemFromDom(dom) {
+            const nameNode = dom.closest && dom.closest('.wp-s-pan-list__file-name');
+            const fileName = (nameNode?.innerText || dom.innerText || dom.getAttribute?.('title') || '').trim().replace(/\s+/g, ' ');
+            const list = this.getCurrentFileList();
+            const byName = list.find(v => {
+                const name = (v.server_filename || v.filename || '').trim().replace(/\s+/g, ' ');
+                return name && fileName && name === fileName;
+            });
+            if (byName) return byName;
+
+            const seen = new Set();
+            const scan = (value, depth = 0) => {
+                if (!value || depth > 6) return null;
+                if (typeof value !== 'object') return null;
+                if (seen.has(value)) return null;
+                seen.add(value);
+                if (Array.isArray(value)) {
+                    for (const item of value) {
+                        const found = scan(item, depth + 1);
+                        if (found) return found;
+                    }
+                    return null;
+                }
+                if (value.fs_id && (value.filename || value.server_filename)) {
+                    return value;
+                }
+                for (const key of Object.keys(value)) {
+                    const found = scan(value[key], depth + 1);
+                    if (found) return found;
+                }
+                return null;
+            };
+
+            const pool = [];
+            for (let node = dom; node; node = node.parentElement) {
+                try {
+                    const reactNode = this.findReact(node);
+                    reactNode && pool.push(reactNode);
+                } catch (e) {
+                }
+                for (const key of Object.keys(node)) {
+                    if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
+                        pool.push(node[key]);
+                    }
+                }
+            }
+            pool.push(dom);
+            for (const item of pool) {
+                const found = scan(item);
+                if (found) return found;
+            }
+            return null;
+        },
+
         getLogid() {
             let ut = require("system-core:context/context.js").instanceForSystem.tools.baseService;
             return ut.base64Encode(base.getCookie("BAIDUID"));
@@ -1281,16 +1445,31 @@
                 document.execCommand('copy');
                 document.body.removeChild(temp);
                 message.success('aria2c 链接已自动复制到剪切板！');
+                if (nativeDownloadRow) {
+                    setTimeout(() => {
+                        this.tryUnselectRowFromDom(nativeDownloadRow);
+                        nativeDownloadRow = null;
+                    }, 0);
+                }
             }
         },
 
         async initPanLinker() {
             base.initDefaultConfig();
             base.addPanLinkerStyle();
+            base.removeYunyiduo();
+            if (!window.__plYunyiduoObserver) {
+                window.__plYunyiduoObserver = new MutationObserver(() => base.removeYunyiduo());
+                window.__plYunyiduoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+            }
+            if (!yunyiduoTimer) {
+                yunyiduoTimer = setInterval(() => base.removeYunyiduo(), 1000);
+            }
             pt = this.detectPage();
             pan = LOCAL_PAN_CONFIG;
             base.setValue('setting_init_code', LOCAL_PAN_CONFIG.num);
             base.setValue('license', LOCAL_PAN_CONFIG.license);
+            // 云一朵相关入口屏蔽，保留这一段便于后续恢复。
             this.addButton();
             base.createTip();
             base.registerMenuCommand();

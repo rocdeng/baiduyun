@@ -1,93 +1,56 @@
-<p align="center">
-  <span>
-    <img width="100" height="100" src="https://www.youxiaohou.com/logo.png">
-  </span>
-</p>
+# Netdisk Direct Download Helper NG
 
-<h1 align="center">Netdisk Direct Download Helper</h1>
+A Tampermonkey userscript for Baidu Netdisk web pages. It generates direct-download commands for selected files. Current version: `1.0`.
 
-<p align="center">
-  <img src="https://img.shields.io/badge/TamperMonkey-v4.13-brightgreen.svg" alt="tampermonkey">
-  <a href="LICENSE">
-    <img src="https://img.shields.io/badge/license-AGPLv3.0-lightgrey.svg" alt="LICENSE">
-  </a>
-  <img src="https://img.shields.io/badge/Chrome-≥76.0-brightgreen.svg" alt="chrome">
-  <img src="https://img.shields.io/badge/Edge-≥88.0-brightgreen.svg" alt="chrome">
-  <img src="https://img.shields.io/badge/Platform-Windows%20%7C%20Mac%20%7C%20Linux-blue.svg" alt="platform">
-</p>
+## Current Scope
 
-<div align="center">
-  <h3>
-    <span>Website</span>
-    <span> | </span>
-    <span>Features</span>
-    <span> | </span>
-    <span>Downloads</span>
-    <span> | </span>
-    <span>Software</span>
-    <span> | </span>
-    <span>Q&A</span>
-    <span> | </span>
-    <a href="https://github.com/syhyz1990/baiduyun/issues">
-      Issues
-    </a>
-  </h3>
-</div>
+| Item | Description |
+|---|---|
+| Supported netdisk | Baidu Netdisk only |
+| Main download flow | Generate an `aria2c` command and copy it to the clipboard |
+| Additional flows | JSON-RPC, cURL, and BitComet command/link generation are still available |
+| Removed | Aliyun-related logic and IDM-style external downloader invocation |
+| Remote config | Removed the `api.youxiaohou.com` remote configuration dependency |
+| External guide links | Removed guide/help hyperlinks pointing to `www.youxiaohou.com` |
 
-<div align="center">
-  <strong>👉 A free and open source netdisk download helper 👈</strong><br>
-  <sub>Available for Linux, macOS and Windows.</sub>
-</div>
+## Main Changes
 
-[English Docs](README_EN.md) | [中文文档](README.md)
+| Area | Change |
+|---|---|
+| Security cleanup | Removed mandatory third-party remote config calls on script startup |
+| Local config | Baidu OAuth `client_id/appkey` is now read from local settings |
+| Aria workflow | Successful Aria generation copies the full `aria2c` command automatically |
+| Native button hook | The native Baidu Netdisk row download button is intercepted and routed to the Aria workflow |
+| Selection handling | The clicked row is selected for generation, then unselected after the command is copied |
+| UI refresh | Main dialog, settings, toast messages, and file list were restyled with an Ant Design-inspired look |
+| Page cleanup | The `.wp-custom-yunyiduo` floating widget is hidden and removed automatically |
+| Metadata | Script name changed to `网盘直链下载助手NG`; icon changed to an embedded SVG data URI |
 
-**[Netdisk Direct Download Helper]** is suitable for browsers that support the installation of Tampermonkey or Violent Monkey extensions on multiple platforms, such as Chrome, 360, QQ, UC, etc.
+## Usage
 
-Support Baidu Netdisk web page. After installation, a `Download Helper` button will appear on the corresponding interface, which can be used with multi-threaded download tools to achieve speed-up.
+| Action | Description |
+|---|---|
+| Single file | Hover a file row and click Baidu Netdisk's native download icon |
+| Batch | Select files and use the top `Download Helper` menu |
+| Aria command | Paste the copied `aria2c "url" --out "filename" --header ...` command into a terminal |
+| Folders | Folders cannot be converted directly; open the folder and select files inside |
+| AppKey | Enter your own Baidu AppKey in settings, then finish the OAuth flow when prompted |
 
-## 🎨 Interface
+## Security Notes
 
-![](https://cdn.jsdelivr.net/gh/youxiaohou/img/202111301311340.gif)
+| Item | Description |
+|---|---|
+| Baidu endpoints | Uses Baidu official domains such as `pan.baidu.com` and `openapi.baidu.com` |
+| BDUSS | The generated Aria command includes the local browser `BDUSS` cookie as a request header |
+| Access token | OAuth `access_token` is stored locally by the userscript |
+| Third-party remote calls | Startup no longer depends on a third-party config server |
+| Command privacy | Copied commands include direct links, filenames, and `BDUSS`; do not share them |
 
-## 📖 Tutorial
+## Requirements
 
-- Windows
+| Item | Description |
+|---|---|
+| Userscript manager | Tampermonkey |
+| Browser | Chrome, Edge, or another modern browser supporting Tampermonkey |
+| Download tool | `aria2c` is recommended |
 
-- MacOS
-
-- Linux
-
-## 💽 Install
-
-Please make sure you have installed [Tampermonkey](http://pan.youxiaohou.com/down)
-
-- Install
-
-## ✨ Features
-
-- ✅ Support multiple operating systems: Windows, Linux, Mac
-- ✅ Support multiple download protocols: HTTP, JSON-RPC, cURL
-- ✅ Support multiple downloaders: IDM, XDown, Aria2, NDM, Motrix, terminal
-- ✅ Support a small number of file download links to obtain Baidu Netdisk
-- ✅ The download link can be sent to local or remote download via JSON-RPC protocol
-- ✅ Support skin replacement, automatic update, new version of the network disk interface
-
-## 🚀 Speed
-
-Speed test of SVIP using different download software:
-
-- **[IDM download speed](http://pan.youxiaohou.com/down)**
-
-![IDM](https://i.loli.net/2020/10/07/PDeTtzvUNXEcdwB.gif)
-
-- **[XDown download speed](http://pan.youxiaohou.com/down)**
-
-![XDown](https://i.loli.net/2020/10/07/jOoC17iVQ8ef3X4.gif)
-
-- **[Motrix download speed](http://pan.youxiaohou.com/down)**
-
-![Motrix](https://i.loli.net/2020/10/07/KEqvPQeC7YDVTs6.gif)
-
-## 👻 Notes
-
-Folders are not supported, you can select files to download in batches, please refer to FAQ
