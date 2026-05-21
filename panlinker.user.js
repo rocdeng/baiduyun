@@ -742,7 +742,8 @@
             let BDUSS = this.getBDUSS();
             if (!!BDUSS) {
                 filename = base.fixFilename(filename);
-                return `aria2c "${link}" --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
+                // Aria2 稳定参数：断点续传、8 线程、10MB 分片，兼顾速度和服务器压力。
+                return `aria2c "${link}" -c -s 8 -x 8 -k 1M --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
             }
             return {
                 link: LOCAL_PAN_CONFIG.assistant,
