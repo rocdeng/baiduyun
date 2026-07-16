@@ -659,6 +659,7 @@
             .pl-loading-box div { box-sizing: content-box; }
             .swal2-container { z-index:100000!important; }
             body.swal2-height-auto { height: inherit!important; }
+            .pl-rename-input:focus { border-color:#4096ff!important; box-shadow:0 0 0 2px rgba(5,145,255,.1); }
             .btn-operate .btn-main { display:flex; align-items:center; }
             /* 云一朵/AI助手入口：保留注释，便于后续恢复。 */
             .wp-custom-input-wrap,
@@ -941,6 +942,9 @@
             doc.on('click', '.listener-open-setting', () => {
                 base.showSetting();
             });
+            doc.on('click', '.listener-batch-rename', () => {
+                this.showBatchRenameDialog();
+            });
             doc.on('click', '.listener-rpc-task', () => {
                 const rpc = {
                     domain: base.getValue('setting_rpc_domain'),
@@ -1002,15 +1006,193 @@
             if (!pt) return;
             this.addPageListener();
             let $toolWrap;
-            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
+            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
             if (pt === 'main') {
                 $toolWrap = $(LOCAL_PAN_CONFIG.btn.main);
-                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: ${color};border-color: ${color};font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.newX : ''}</ul></div>`);
+                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: ${color};border-color: ${color};font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.newX : ''}</ul></div>`);
             }
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
             if (!$toolWrap.length || $toolWrap.children('.pl-button').length) return;
             $toolWrap.prepend($button);
+        },
+
+        buildSeasonRename(filename, seasonCode, deleteText = '') {
+            if (/^S\d+E\d+(?:\s|\.|$)/i.test(filename)) return null;
+            const match = filename.match(/^(\d+)(.*)$/);
+            if (!match) return null;
+            const episodeCode = String(Number(match[1])).padStart(2, '0');
+            let suffix = match[2];
+            if (deleteText) {
+                deleteText.split(/\s+/).filter(Boolean).forEach((text) => {
+                    if (text === '\\s') {
+                        suffix = suffix.replace(/\s+/g, '');
+                        return;
+                    }
+                    const escapedText = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                    suffix = suffix.replace(new RegExp(escapedText, 'gi'), '');
+                });
+                suffix = suffix.replace(/\s{2,}/g, ' ').replace(/\s+(\.[^./\\]+)$/, '$1');
+            }
+            return `S${seasonCode}E${episodeCode}${suffix}`;
+        },
+
+        getBdstoken() {
+            try {
+                const data = typeof locals?.dump === 'function' ? locals.dump() : locals;
+                const token = data?.bdstoken?.value || data?.bdstoken || data?.userInfo?.bdstoken;
+                if (token) return token;
+            } catch (e) {
+            }
+            const windowToken = window.locals?.bdstoken?.value || window.locals?.bdstoken || window.locals?.userInfo?.bdstoken;
+            if (windowToken) return windowToken;
+
+            // 新版网盘将登录上下文写入页面脚本，油猴隔离环境无法直接读取页面 window.locals。
+            for (const script of document.scripts) {
+                const text = script.textContent || '';
+                if (!text.includes('bdstoken')) continue;
+                const match = text.match(/["']bdstoken["']\s*:\s*["']([^"']+)["']/);
+                if (match?.[1]) return match[1];
+            }
+            return '';
+        },
+
+        async showBatchRenameDialog() {
+            const selected = this.getSelectedList() || [];
+            if (!selected.length) {
+                return message.error('提示：请先勾选要更名的文件！');
+            }
+
+            const seasonDialog = await Swal.fire({
+                title: '批量更名',
+                html: `<div style="max-width:440px;margin:0 auto;text-align:left;">
+                    <label for="pl-season-number" style="display:block;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;">Season 号</label>
+                    <input id="pl-season-number" class="pl-rename-input" value="01" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:40px;margin:0 0 16px;padding:4px 11px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;color:#262626;font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s;">
+                    <label for="pl-delete-text" style="display:block;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;">删除字符（多个字符用空格分隔，\\s 表示空格）</label>
+                    <input id="pl-delete-text" class="pl-rename-input" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:40px;margin:0;padding:4px 11px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;color:#262626;font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s;">
+                </div>`,
+                showCancelButton: true,
+                confirmButtonText: '生成预览',
+                cancelButtonText: '取消',
+                showCloseButton: true,
+                focusConfirm: false,
+                didOpen: () => {
+                    const seasonInput = document.getElementById('pl-season-number');
+                    seasonInput.focus();
+                    seasonInput.select();
+                },
+                preConfirm: () => {
+                    const season = document.getElementById('pl-season-number').value.trim();
+                    const deleteText = document.getElementById('pl-delete-text').value.trim();
+                    if (!/^\d+$/.test(season)) {
+                        Swal.showValidationMessage('Season 号只能输入数字');
+                        return false;
+                    }
+                    return {season, deleteText};
+                }
+            });
+            if (!seasonDialog.isConfirmed) return;
+
+            const seasonCode = String(Number(seasonDialog.value.season)).padStart(2, '0');
+            const deleteText = seasonDialog.value.deleteText;
+            const renameList = [];
+            const previewList = [];
+            const skippedList = [];
+
+            selected.forEach((item) => {
+                const filename = item.server_filename || item.filename || '';
+                if (+item.isdir === 1) {
+                    skippedList.push(`${filename || '未命名项目'}（文件夹）`);
+                    return;
+                }
+                if (!item.path) {
+                    skippedList.push(`${filename || '未命名项目'}（缺少文件路径）`);
+                    return;
+                }
+                const newname = this.buildSeasonRename(filename, seasonCode, deleteText);
+                if (!newname) {
+                    skippedList.push(`${filename || '未命名项目'}（非数字开头或已完成剧集命名）`);
+                    return;
+                }
+                renameList.push({path: item.path, newname});
+                previewList.push({filename, newname});
+            });
+
+            if (!renameList.length) {
+                return Swal.fire({
+                    icon: 'info',
+                    title: '没有可更名的文件',
+                    text: '仅处理以数字开头的文件；文件夹和已是 SxxExx 格式的文件会被跳过。',
+                    confirmButtonText: '知道了'
+                });
+            }
+
+            const rows = previewList.map((item) => `<tr><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;word-break:break-all;">${base.escapeHtml(item.filename)}</td><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;color:#1677ff;word-break:break-all;">${base.escapeHtml(item.newname)}</td></tr>`).join('');
+            const skipped = skippedList.length ? `<div style="margin-top:12px;padding:10px 12px;background:#fff7e6;border:1px solid #ffd591;border-radius:6px;text-align:left;color:#ad6800;word-break:break-all;">将跳过 ${skippedList.length} 项：<br>${skippedList.map(base.escapeHtml).join('<br>')}</div>` : '';
+            const confirmDialog = await Swal.fire({
+                title: `确认更名 ${renameList.length} 个文件？`,
+                html: `<div style="max-height:420px;overflow:auto;border:1px solid #f0f0f0;border-radius:6px;"><table style="width:100%;border-collapse:collapse;text-align:left;font-size:13px;"><thead style="position:sticky;top:0;background:#fafafa;"><tr><th style="padding:9px 12px;">原文件名</th><th style="padding:9px 12px;">新文件名</th></tr></thead><tbody>${rows}</tbody></table></div>${skipped}`,
+                width: 760,
+                showCancelButton: true,
+                confirmButtonText: '确认更名',
+                cancelButtonText: '取消',
+                showCloseButton: true,
+                focusCancel: true
+            });
+            if (!confirmDialog.isConfirmed) return;
+
+            const bdstoken = this.getBdstoken();
+            if (!bdstoken) {
+                return message.error('提示：未读取到登录信息，请刷新百度网盘后重试！');
+            }
+
+            Swal.fire({
+                title: '正在批量更名',
+                allowOutsideClick: false,
+                showConfirmButton: false,
+                didOpen: () => Swal.showLoading()
+            });
+
+            const url = `https://pan.baidu.com/api/filemanager?opera=rename&async=2&onnest=fail&channel=chunlei&web=1&app_id=250528&clienttype=0&bdstoken=${encodeURIComponent(bdstoken)}`;
+            let rawResponse = '';
+            try {
+                let res = await base.post(url, base.stringify({filelist: JSON.stringify(renameList)}), {
+                    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+                    'X-Requested-With': 'XMLHttpRequest'
+                });
+                rawResponse = typeof res === 'string' ? res : JSON.stringify(res, null, 2);
+                if (typeof res === 'string') res = JSON.parse(res);
+                if (+res.errno !== 0) {
+                    throw new Error(`百度接口错误码：${res.errno ?? '未知'}${res.errmsg ? `，${res.errmsg}` : ''}`);
+                }
+                Swal.close();
+                message.success(`批量更名已提交：${renameList.length} 个文件${skippedList.length ? `，跳过 ${skippedList.length} 项` : ''}`);
+                setTimeout(() => location.reload(), 1000);
+            } catch (e) {
+                const errorInfo = [
+                    '网盘直链下载助手NG - 批量更名失败',
+                    `时间：${new Date().toLocaleString()}`,
+                    `更名文件数：${renameList.length}`,
+                    `错误信息：${e?.message || '未知错误'}`,
+                    '',
+                    '百度接口响应：',
+                    rawResponse || '未收到响应'
+                ].join('\n');
+                const errorDialog = await Swal.fire({
+                    icon: 'error',
+                    title: '批量更名失败',
+                    html: `<textarea readonly style="display:block;width:100%;height:220px;padding:10px 12px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fafafa;color:#262626;font:12px/1.6 monospace;resize:vertical;outline:none;">${base.escapeHtml(errorInfo)}</textarea>`,
+                    width: 680,
+                    showCancelButton: true,
+                    confirmButtonText: '复制错误信息',
+                    cancelButtonText: '关闭',
+                    showCloseButton: true
+                });
+                if (errorDialog.isConfirmed) {
+                    base.setClipboard(errorInfo);
+                    message.success('错误信息已复制到剪贴板！');
+                }
+            }
         },
 
         async getToken() {
