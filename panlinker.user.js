@@ -1415,7 +1415,7 @@
                 const errorDialog = await Swal.fire({
                     icon: 'error',
                     title: '批量更名失败',
-                    html: `<textarea readonly style="display:block;width:100%;height:220px;padding:10px 12px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fafafa;color:#262626;font:12px/1.6 monospace;resize:vertical;outline:none;">${base.escapeHtml(errorInfo)}</textarea>`,
+                    html: `<textarea readonly style="display:block;width:100%;height:220px;padding:10px 12px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);color:rgba(20,28,44,0.92);font:12px/1.6 monospace;resize:vertical;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;">${base.escapeHtml(errorInfo)}</textarea>`,
                     width: 680,
                     showCancelButton: true,
                     confirmButtonText: '复制错误信息',
