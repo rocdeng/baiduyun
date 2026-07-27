@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              网盘直链下载助手NG
 // @namespace         https://github.com/syhyz1990/baiduyun
-// @version           1.0
+// @version           1.0.16
 // @author            YouXiaoHou
 // @description       支持批量获取百度网盘直链下载地址，脚本拉取文件后由浏览器保存。
 // @license           AGPL-3.0-or-later
@@ -10,6 +10,8 @@
 // @match             *://yun.baidu.com/disk/home*
 // @match             *://pan.baidu.com/disk/main*
 // @match             *://yun.baidu.com/disk/main*
+// @match             *://pan.baidu.com/pfile/video*
+// @match             *://yun.baidu.com/pfile/video*
 // @match             *://pan.baidu.com/s/*
 // @match             *://yun.baidu.com/s/*
 // @match             *://pan.baidu.com/share/*
@@ -68,6 +70,13 @@
         ls: "Linux Shell",
         mt: "MacOS 终端",
     };
+    const DEFAULT_FILTER_SELECTORS = [
+        '.nd-operate-guidance',
+        '.wp-custom-input-wrap',
+        '.wp-custom-yunyiduo',
+        '.bottom-chat-ai-wrapper',
+        '.nd-ai-tools-iframe'
+    ];
 
     const LOCAL_PAN_CONFIG = Object.freeze({
         pcs: {
@@ -184,7 +193,30 @@
         },
 
         setClipboard(text) {
-            GM_setClipboard(text, 'text');
+            const value = String(text ?? '').replace(/(?:\r\n|\r|\n)+$/g, '');
+            if (!value) return false;
+            let copied = false;
+            try {
+                GM_setClipboard(value, 'text');
+                copied = true;
+            } catch (e) {
+                // 继续尝试浏览器原生复制，兼容不同脚本管理器和操作系统。
+            }
+            const temp = document.createElement('textarea');
+            temp.value = value;
+            temp.setAttribute('readonly', 'readonly');
+            temp.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0;pointer-events:none;';
+            document.body.appendChild(temp);
+            temp.focus();
+            temp.select();
+            temp.setSelectionRange(0, value.length);
+            try {
+                copied = document.execCommand('copy') || copied;
+            } catch (e) {
+                // GM_setClipboard 成功时仍可正常返回。
+            }
+            document.body.removeChild(temp);
+            return copied;
         },
 
         escapeHtml(value) {
@@ -412,6 +444,9 @@
                 name: 'setting_theme_color',
                 value: '#09AAFF'
             }, {
+                name: 'setting_filter_selectors',
+                value: DEFAULT_FILTER_SELECTORS.join('\n')
+            }, {
                 name: 'setting_init_code',
                 value: ''
             }, {
@@ -422,31 +457,43 @@
             value.forEach((v) => {
                 base.getValue(v.name) === undefined && base.setValue(v.name, v.value);
             });
+            const filterSelectors = String(base.getValue('setting_filter_selectors') || '');
+            const safeFilterSelectors = filterSelectors
+                .split(/\r?\n/)
+                .map(selector => selector.trim())
+                .filter(selector => selector && selector !== '.wp-s-core-pan.yunyiduo-guide-show')
+                .join('\n');
+            if (safeFilterSelectors !== filterSelectors) {
+                base.setValue('setting_filter_selectors', safeFilterSelectors || DEFAULT_FILTER_SELECTORS.join('\n'));
+            }
         },
 
         showSetting() {
             let dom = '', btn = '',
                 colorList = ['#09AAFF', '#cc3235', '#526efa', '#518c17', '#ed944b', '#f969a5', '#bca280'];
-            dom += `<div class="pl-setting-group"><div class="pl-setting-group-title">连接设置</div><div class="pl-setting-group-desc">用于生成下载链接和推送任务。</div>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">RPC主机</div><input type="text" placeholder="主机地址，需带上http(s)://" class="pl-input listener-domain" value="${base.getValue('setting_rpc_domain')}"></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">RPC端口</div><input type="text" placeholder="端口号，例如：Motrix为16800" class="pl-input listener-port" value="${base.getValue('setting_rpc_port')}"></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">RPC路径</div><input type="text" placeholder="路径，默认为/jsonrpc" class="pl-input listener-path" value="${base.getValue('setting_rpc_path')}"></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">RPC密钥</div><input type="text" placeholder="无密钥无需填写" class="pl-input listener-token" value="${base.getValue('setting_rpc_token')}"></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">保存路径</div><input type="text" placeholder="文件下载后保存路径，例如：D:" class="pl-input listener-dir" value="${base.getValue('setting_rpc_dir')}"></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">百度AppKey</div><input type="text" placeholder="替换成你自己的百度开放平台 AppKey" class="pl-input listener-appkey" value="${base.getValue('setting_baidu_appkey')}"></label></div>`;
+            dom += `<div class="pl-setting-group pl-setting-connection"><div class="pl-setting-group-title">连接设置</div><div class="pl-setting-group-desc">用于生成下载链接和推送任务。</div><div class="pl-setting-fields">`;
+            dom += `<label class="pl-setting-field"><span>RPC主机</span><input type="text" placeholder="需带上 http(s)://" class="pl-input listener-domain" value="${base.getValue('setting_rpc_domain')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC端口</span><input type="text" placeholder="例如 16800" class="pl-input listener-port" value="${base.getValue('setting_rpc_port')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC路径</span><input type="text" placeholder="默认 /jsonrpc" class="pl-input listener-path" value="${base.getValue('setting_rpc_path')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC密钥</span><input type="text" placeholder="无密钥无需填写" class="pl-input listener-token" value="${base.getValue('setting_rpc_token')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>保存路径</span><input type="text" placeholder="例如 D:" class="pl-input listener-dir" value="${base.getValue('setting_rpc_dir')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>百度 AppKey</span><input type="text" placeholder="百度开放平台 AppKey" class="pl-input listener-appkey" value="${base.getValue('setting_baidu_appkey')}"></label></div></div>`;
 
             colorList.forEach((v) => {
                 btn += `<div data-color="${v}" style="background: ${v};border: 1px solid ${v}" class="pl-color-box listener-color ${v === base.getValue('setting_theme_color') ? 'checked' : ''}"></div>`;
             });
-            dom += `<div class="pl-setting-group"><div class="pl-setting-group-title">外观</div><div class="pl-setting-group-desc">调整脚本界面与命令生成方式。</div>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">终端类型</div><select class="pl-input listener-terminal">`;
+            dom += `<div class="pl-setting-row"><div class="pl-setting-group"><div class="pl-setting-group-title">外观</div><div class="pl-setting-group-desc">调整脚本界面与命令生成方式。</div>`;
+            dom += `<label class="pl-setting-field"><span>终端类型</span><select class="pl-input listener-terminal">`;
             Object.keys(terminalType).forEach(k => {
                 dom += `<option value="${k}" ${base.getValue('setting_terminal_type') === k ? 'selected' : ''}>${terminalType[k]}</option>`;
             });
             dom += `</select></label>`;
-            dom += `<label class="pl-setting-label"><div class="pl-label">主题颜色</div> <div class="pl-color">${btn}<div></label>`;
+            dom += `<div class="pl-setting-field"><span>主题颜色</span><div class="pl-color">${btn}</div></div>`;
             dom += `</div>`;
-            dom = '<div class="pl-setting-panel">' + dom + '</div>';
+            dom += `<div class="pl-setting-group"><div class="pl-setting-group-title">页面过滤</div><div class="pl-setting-group-desc">每行填写一个 CSS 选择器，可添加多个需要自动隐藏并删除的 DIV 或其他页面元素。</div>`;
+            dom += `<label class="pl-setting-field"><span>过滤元素</span><textarea class="pl-input listener-filter-selectors" placeholder="例如：&#10;.nd-operate-guidance&#10;#some-ad">${base.escapeHtml(base.getValue('setting_filter_selectors') || '')}</textarea></label>`;
+            dom += `<div class="pl-setting-help">支持类名、ID 和属性选择器，例如 <code>.ad-box</code>、<code>#popup</code>、<code>div[data-ad]</code>。无效选择器会自动跳过。</div></div></div>`;
+            dom = '<div class="pl-setting-panel pl-setting-wide">' + dom + '</div>';
 
             Swal.fire({
                 title: '助手配置',
@@ -455,6 +502,7 @@
                 showCloseButton: true,
                 showConfirmButton: false,
                 footer: LOCAL_PAN_CONFIG.footer,
+                width: 940,
             }).then(() => {
                 message.success('设置成功！');
                 history.go(0);
@@ -485,6 +533,10 @@
             });
             doc.on('change', '.listener-terminal', async (e) => {
                 base.setValue('setting_terminal_type', e.target.value);
+            });
+            doc.on('input', '.listener-filter-selectors', async (e) => {
+                base.setValue('setting_filter_selectors', e.target.value);
+                base.removeFilteredElements();
             });
         },
 
@@ -559,70 +611,101 @@
             checkElement();
         },
 
-        removeYunyiduo() {
-            // 云一朵输入框外层容器：百度网盘动态挂载的 AI/知识搜索入口。
-            document.querySelectorAll('.wp-custom-input-wrap, .wp-custom-yunyiduo').forEach((node) => node.remove());
-            // 底部云一朵聊天区：iframe 形式的知识搜索入口。
-            document.querySelectorAll('.bottom-chat-ai-wrapper, .nd-ai-tools-iframe').forEach((node) => node.remove());
-            // 云一朵引导态标记，避免页面再次进入该引导分支。
-            document.querySelectorAll('.yunyiduo-guide-show').forEach((node) => node.classList.remove('yunyiduo-guide-show'));
+        getFilterSelectors() {
+            return String(base.getValue('setting_filter_selectors') || '')
+                .split(/\r?\n/)
+                .map(selector => selector.trim())
+                .filter(Boolean);
+        },
+
+        removeFilteredElements() {
+            this.getFilterSelectors().forEach((selector) => {
+                try {
+                    document.querySelectorAll(selector).forEach((node) => node.remove());
+                } catch (e) {
+                    // 用户自定义选择器可能有误，跳过该行，不影响其他过滤规则。
+                }
+            });
+            // 这是网盘页面根容器上的状态类，只能移除类名，不能删除整个容器。
+            document.querySelectorAll('.wp-s-core-pan.yunyiduo-guide-show').forEach((node) => node.classList.remove('yunyiduo-guide-show'));
         },
 
         addPanLinkerStyle() {
             color = base.getValue('setting_theme_color');
             let css = `
+            :root {
+                --pl-glass-bg: rgba(255,255,255,0.72);
+                --pl-glass-blur: blur(20px) saturate(160%);
+                --pl-glass-border: rgba(255,255,255,0.6);
+                --pl-shadow-sm: 0 4px 16px rgba(0,0,0,0.06);
+                --pl-shadow-lg: 0 12px 32px rgba(0,0,0,0.08);
+                --pl-shadow-inset: inset 0 1px 0 rgba(255,255,255,0.5);
+                --pl-text-1: rgba(20,28,44,0.92);
+                --pl-text-2: rgba(20,28,44,0.55);
+                --pl-text-3: rgba(20,28,44,0.4);
+                --pl-radius-panel: 16px;
+                --pl-radius-card: 12px;
+                --pl-radius-ctrl: 8px;
+                --pl-radius-tag: 6px;
+                --pl-ease: cubic-bezier(0.4,0,0.2,1);
+                --pl-dur: 0.22s;
+                --pl-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                --pl-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, Monaco, monospace;
+            }
             body::-webkit-scrollbar { display: none }
             ::-webkit-scrollbar { width: 6px; height: 10px }
             ::-webkit-scrollbar-track { border-radius: 0; background: none }
             ::-webkit-scrollbar-thumb { background-color: rgba(85,85,85,.4) }
             ::-webkit-scrollbar-thumb,::-webkit-scrollbar-thumb:hover { border-radius: 5px; -webkit-box-shadow: inset 0 0 6px rgba(0,0,0,.2) }
             ::-webkit-scrollbar-thumb:hover { background-color: rgba(85,85,85,.3) }
-            .swal2-popup { font-size: 14px !important; border-radius: 12px !important; padding: 20px !important; box-shadow: 0 8px 28px rgba(0,0,0,.14) !important; }
-            .swal2-title { font-size: 18px !important; font-weight: 600 !important; color: rgba(0,0,0,.88) !important; margin: 0 !important; padding: 0 !important; }
-            .swal2-html-container { margin: 0 !important; color: rgba(0,0,0,.88) !important; }
-            .swal2-close { color: rgba(0,0,0,.45) !important; outline: none !important; }
-            .swal2-close:hover { color: rgba(0,0,0,.88) !important; }
-            .pl-popup { font-size: 14px !important; color: rgba(0,0,0,.88); }
+            .swal2-container { z-index:100000!important; background: rgba(20,28,44,0.22)!important; backdrop-filter: blur(6px) saturate(140%); -webkit-backdrop-filter: blur(6px) saturate(140%); }
+            body.swal2-height-auto { height: inherit!important; }
+            .swal2-popup { font-family: var(--pl-font); font-size: 14px !important; border-radius: var(--pl-radius-panel) !important; padding: 20px !important; background: var(--pl-glass-bg)!important; backdrop-filter: var(--pl-glass-blur); -webkit-backdrop-filter: var(--pl-glass-blur); border: 1px solid var(--pl-glass-border); box-shadow: var(--pl-shadow-sm), var(--pl-shadow-lg), var(--pl-shadow-inset)!important; }
+            .swal2-title { font-family: var(--pl-font); font-size: 18px !important; font-weight: 600 !important; letter-spacing: 0.2px; color: var(--pl-text-1) !important; margin: 0 !important; padding: 0 !important; }
+            .swal2-html-container { margin: 0 !important; color: var(--pl-text-1) !important; }
+            .swal2-close { color: var(--pl-text-3) !important; outline: none !important; }
+            .swal2-close:hover { color: var(--pl-text-1) !important; }
+            .pl-popup { font-family: var(--pl-font); font-size: 14px !important; color: var(--pl-text-1); }
             .pl-popup a { color: ${color} !important; }
-            .pl-header { padding: 0 0 12px!important;align-items: flex-start!important; border-bottom: 1px solid #f0f0f0!important; margin: 0 0 16px!important; }
-            .pl-title { font-size: 18px!important; line-height: 1.4!important; font-weight: 600!important; white-space: nowrap!important; text-overflow: ellipsis!important;}
+            .pl-header { padding: 0 0 12px!important; align-items: flex-start!important; border-bottom: 1px solid rgba(0,0,0,0.06)!important; margin: 0 0 16px!important; }
+            .pl-title { font-size: 18px!important; line-height: 1.4!important; font-weight: 600!important; letter-spacing: 0.2px; white-space: nowrap!important; text-overflow: ellipsis!important; color: var(--pl-text-1)!important; }
             .pl-content { padding: 0 !important; font-size: 14px!important; }
-            .pl-main { max-height: 420px; overflow-y: auto; border: 1px solid #f0f0f0; border-radius: 8px; overflow-x: hidden; }
-            .pl-footer {font-size: 12px!important;justify-content: flex-start!important; margin: 12px 0 0!important; padding: 10px 0 0!important; color: rgba(0,0,0,.45)!important; border-top: 1px solid #f0f0f0; }
-            .pl-table-head { display:flex; align-items:center; gap: 10px; padding: 10px 12px; background: #fafafa; border-bottom: 1px solid #f0f0f0; color: rgba(0,0,0,.45); font-weight: 600; line-height: 22px; }
+            .pl-main { max-height: 420px; overflow-y: auto; border: 1px solid rgba(255,255,255,0.5); border-radius: var(--pl-radius-card); overflow-x: hidden; background: rgba(255,255,255,0.5); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
+            .pl-footer { font-size: 12px!important; justify-content: flex-start!important; margin: 12px 0 0!important; padding: 10px 0 0!important; color: var(--pl-text-3)!important; border-top: 1px solid rgba(0,0,0,0.06); }
+            .pl-table-head { display:flex; align-items:center; gap: 10px; padding: 10px 12px; background: rgba(245,247,250,0.6); border-bottom: 1px solid rgba(0,0,0,0.06); color: var(--pl-text-2); font-weight: 600; line-height: 22px; }
             .pl-th-name { flex: 0 0 180px; text-align:left; }
             .pl-th-size { flex: 0 0 88px; text-align:left; }
             .pl-th-action { flex: 1; text-align:left; }
-            .pl-item { display: flex; align-items: center; gap: 10px; line-height: 24px; padding: 10px 12px; border-bottom: 1px solid #f5f5f5; background: #fff; transition: background-color .2s; }
-            .pl-item:hover { background: #fafafa; }
+            .pl-item { display: flex; align-items: center; gap: 10px; line-height: 24px; padding: 10px 12px; border-bottom: 1px solid rgba(0,0,0,0.04); background: rgba(255,255,255,0.4); transition: background-color var(--pl-dur) var(--pl-ease); }
+            .pl-item:hover { background: rgba(255,255,255,0.7); }
             .pl-item:last-child { border-bottom: 0; }
-            .pl-item-name { flex: 0 0 180px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor:default; color: rgba(0,0,0,.88); }
-            .pl-item-size { flex: 0 0 88px; text-align:left; color: rgba(0,0,0,.45); white-space: nowrap; }
+            .pl-item-name { flex: 0 0 180px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor:default; color: var(--pl-text-1); }
+            .pl-item-size { flex: 0 0 88px; text-align:left; color: var(--pl-text-2); white-space: nowrap; }
             .pl-item-link { flex: 1; overflow: hidden; text-align: left; white-space: nowrap; text-overflow: ellipsis; cursor:pointer; color: ${color}; }
-            .pl-item-btn { background: ${color}; padding: 4px 10px; border-radius: 6px; line-height: 1; cursor: pointer; color: #fff; border: 0; }
-            .pl-item-tip { display: flex; justify-content: space-between; gap: 10px; flex: 1; color: rgba(0,0,0,.45); }
-            .pl-back { width: 70px; background: #f5f5f5; color: rgba(0,0,0,.88); border-radius: 6px; cursor:pointer; margin:1px 0; text-align: center; border: 1px solid #f0f0f0; }
-            .pl-ext { display: inline-block; width: 44px; background: #f0f0f0; color: rgba(0,0,0,.88); height: 16px; line-height: 16px; font-size: 12px; border-radius: 4px; }
-            .pl-retry {padding: 3px 10px; background: #ff4d4f; color: #fff; border-radius: 6px; cursor: pointer;}
-            .pl-browserdownload { padding: 3px 10px; background: ${color}; color: #fff; border-radius: 6px; cursor: pointer;}
-            .pl-item-progress { display:flex;flex: 1;align-items:center; gap: 10px; }
+            .pl-item-btn { background: ${color}; padding: 4px 10px; border-radius: var(--pl-radius-tag); line-height: 1; cursor: pointer; color: #fff; border: 0; }
+            .pl-item-tip { display: flex; justify-content: space-between; gap: 10px; flex: 1; color: var(--pl-text-2); }
+            .pl-back { width: 70px; background: rgba(255,255,255,0.6); color: var(--pl-text-1); border-radius: var(--pl-radius-tag); cursor:pointer; margin:1px 0; text-align: center; border: 1px solid rgba(255,255,255,0.5); }
+            .pl-ext { display: inline-block; width: 44px; background: rgba(0,0,0,0.06); color: var(--pl-text-1); height: 16px; line-height: 16px; font-size: 12px; border-radius: 4px; }
+            .pl-retry {padding: 3px 10px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
+            .pl-browserdownload { padding: 3px 10px; background: ${color}; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
+            .pl-item-progress { display:flex; flex: 1; align-items:center; gap: 10px; }
             .pl-progress { display: inline-block;vertical-align: middle;width: 100%; box-sizing: border-box;line-height: 1;position: relative;height: 16px; flex: 1; }
-            .pl-progress-outer { height: 16px;border-radius: 999px;background-color: #f5f5f5;overflow: hidden;position: relative;vertical-align: middle;border: 1px solid #f0f0f0; }
-            .pl-progress-inner{ position: absolute;left: 0;top: 0;background-color: ${color};text-align: right;border-radius: 999px;line-height: 1;white-space: nowrap;transition: width .3s ease;}
-            .pl-progress-inner-text { display: inline-block;vertical-align: middle;color: rgba(0,0,0,.45);font-size: 12px;margin: 0 6px;height: 16px}
-            .pl-progress-tip{ flex:1;text-align:right; color: rgba(0,0,0,.45); }
-            .pl-progress-how{ flex: 0 0 88px; background: #f5f5f5; border-radius: 6px; margin-left: 0; cursor: pointer; text-align: center; color: rgba(0,0,0,.88); border: 1px solid #f0f0f0; }
-            .pl-progress-stop{ flex: 0 0 60px; padding: 0 12px; background: #ff4d4f; color: #fff; border-radius: 6px; cursor: pointer;margin-left:0;height:24px; line-height: 24px; text-align:center; border: 0; }
+            .pl-progress-outer { height: 16px;border-radius: 999px;background-color: rgba(0,0,0,0.06);overflow: hidden;position: relative;vertical-align: middle;border: 1px solid rgba(255,255,255,0.4); }
+            .pl-progress-inner{ position: absolute;left: 0;top: 0;background-color: ${color};text-align: right;border-radius: 999px;line-height: 1;white-space: nowrap;transition: width .3s ease; box-shadow: inset 0 1px 0 rgba(255,255,255,0.4); }
+            .pl-progress-inner-text { display: inline-block;vertical-align: middle;color: var(--pl-text-2);font-size: 12px;margin: 0 6px;height: 16px}
+            .pl-progress-tip{ flex:1;text-align:right; color: var(--pl-text-2); }
+            .pl-progress-how{ flex: 0 0 88px; background: rgba(255,255,255,0.6); border-radius: var(--pl-radius-tag); margin-left: 0; cursor: pointer; text-align: center; color: var(--pl-text-1); border: 1px solid rgba(255,255,255,0.5); }
+            .pl-progress-stop{ flex: 0 0 60px; padding: 0 12px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;margin-left:0;height:24px; line-height: 24px; text-align:center; border: 0; }
             .pl-progress-inner-text:after { display: inline-block;content: "";height: 100%;vertical-align: middle;}
-            .pl-btn-primary { background: ${color}; border: 0; border-radius: 6px; color: #ffffff; cursor: pointer; font-size: 13px; outline: none; display:flex; align-items: center; justify-content: center; margin: 2px 0; padding: 8px 12px; transition: 0.2s opacity, 0.2s box-shadow; box-shadow: 0 2px 0 rgba(5,145,255,.1); }
-            .pl-btn-primary:hover { opacity: 0.95; }
+            .pl-btn-primary { background: ${color}; border: 0; border-radius: var(--pl-radius-ctrl); color: #ffffff; cursor: pointer; font-family: var(--pl-font); font-size: 13px; outline: none; display:flex; align-items: center; justify-content: center; margin: 2px 0; padding: 8px 12px; transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), opacity var(--pl-dur) var(--pl-ease); box-shadow: 0 2px 8px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25); }
+            .pl-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25); }
             .pl-btn-success { background: #52c41a; }
             .pl-btn-info { background: #1677ff; }
             .pl-btn-warning { background: #faad14; }
             .pl-btn-danger { background: #ff4d4f; }
-            .pl-dropdown-menu {position: absolute;right: 0;top: 36px;padding: 6px 0;color: rgba(0,0,0,.88);background: #fff;z-index: 999;width: 132px;border: 1px solid #f0f0f0;border-radius: 8px; box-shadow: 0 6px 16px rgba(0,0,0,.08), 0 3px 6px rgba(0,0,0,.04);}
-            .pl-dropdown-menu-item { height: 34px;display: flex;align-items: center;justify-content: center;cursor:pointer; padding: 0 12px; }
-            .pl-dropdown-menu-item:hover { background-color: #f5f5f5;}
+            .pl-dropdown-menu {position: absolute;right: 0;top: 36px;padding: 6px 0;color: var(--pl-text-1);background: var(--pl-glass-bg);backdrop-filter: var(--pl-glass-blur);-webkit-backdrop-filter: var(--pl-glass-blur);z-index: 999;width: 132px;border: 1px solid var(--pl-glass-border);border-radius: var(--pl-radius-card); box-shadow: var(--pl-shadow-sm), var(--pl-shadow-lg);}
+            .pl-dropdown-menu-item { height: 34px;display: flex;align-items: center;justify-content: center;cursor:pointer; padding: 0 12px; transition: background-color 0.16s var(--pl-ease); }
+            .pl-dropdown-menu-item:hover { background-color: rgba(0,0,0,0.06);}
             .pl-button .pl-dropdown-menu,
             .pl-button > .menu { display: none; }
             .pl-button:hover .pl-dropdown-menu,
@@ -637,19 +720,31 @@
             .pl-extra button { flex: 1}
             .pointer { cursor:pointer }
             .pl-setting-panel { padding: 4px 0 0; }
-            .pl-setting-group { padding: 14px 16px 4px; margin-bottom: 14px; border: 1px solid #f0f0f0; border-radius: 10px; background: #fafafa; }
-            .pl-setting-group-title { font-size: 15px; font-weight: 600; color: rgba(0,0,0,.88); line-height: 1.4; }
-            .pl-setting-group-desc { margin-top: 4px; color: rgba(0,0,0,.45); font-size: 12px; line-height: 1.5; }
-            .pl-setting-label { display: flex;align-items: center;justify-content: space-between;padding-top: 12px; gap: 12px; }
-            .pl-label { flex: 0 0 100px;text-align:left; color: rgba(0,0,0,.88); font-weight: 500; }
-            .pl-input { flex: 1; padding: 8px 12px; border: 1px solid #d9d9d9; border-radius: 6px; font-size: 14px; outline: none; transition: border-color .2s, box-shadow .2s; background: #fff; }
-            .pl-input:focus { border-color: ${color}; box-shadow: 0 0 0 2px rgba(22,119,255,.12); }
-            .pl-color { flex: 1;display: flex;flex-wrap: wrap; margin-right: -10px;}
-            .pl-color-box { width: 28px;height: 28px;margin:10px 10px 0 0; box-sizing: border-box;border:1px solid #fff;cursor:pointer; border-radius: 50%; box-shadow: 0 0 0 1px rgba(0,0,0,.06); }
-            .pl-color-box.checked { border:2px solid #fff!important; box-shadow: 0 0 0 2px ${color}; }
+            .pl-setting-wide { width:100%; box-sizing:border-box; }
+            .pl-setting-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:14px; align-items:stretch; }
+            .pl-setting-group { padding: 14px 16px 16px; margin-bottom: 14px; border: 1px solid var(--pl-glass-border); border-radius: var(--pl-radius-card); background: var(--pl-glass-bg); backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%); box-sizing:border-box; min-width:0; box-shadow: var(--pl-shadow-sm), inset 0 1px 0 rgba(255,255,255,0.5); position: relative; overflow: hidden; }
+            .pl-setting-group::before { content:""; position:absolute; inset:0; background: radial-gradient(120% 80% at 0% 0%, ${color}14, transparent 60%); pointer-events:none; }
+            .pl-setting-group-title { font-size: 15px; font-weight: 600; color: var(--pl-text-1); line-height: 1.4; position: relative; }
+            .pl-setting-group-desc { margin-top: 4px; color: var(--pl-text-2); font-size: 12px; line-height: 1.5; position: relative; }
+            .pl-setting-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:12px; position: relative; }
+            .pl-setting-field { display:flex; flex-direction:column; align-items:stretch; gap:6px; min-width:0; padding-top:12px; color:var(--pl-text-1); font-weight:500; text-align:left; }
+            .pl-setting-fields .pl-setting-field { padding-top:0; }
+            .pl-setting-field > span { font-size:13px; line-height:20px; }
+            .pl-input { width:100%; box-sizing:border-box; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: var(--pl-radius-ctrl); font-family: var(--pl-font); font-size: 14px; outline: none; transition: border-color var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), background-color var(--pl-dur) var(--pl-ease); background: rgba(255,255,255,0.6); color: var(--pl-text-1); }
+            .pl-input:focus { border-color: ${color}; box-shadow: 0 0 0 2px ${color}1f; background: rgba(255,255,255,0.85); }
+            .pl-setting-field textarea.pl-input { min-height:130px; resize:vertical; font-family:var(--pl-mono); line-height:1.55; }
+            .pl-setting-help { margin-top:8px; color:var(--pl-text-2); font-size:12px; line-height:1.6; text-align:left; }
+            .pl-color { display:flex; flex-wrap:wrap; gap:10px; padding-top:2px; }
+            .pl-color-box { width:28px; height:28px; box-sizing:border-box; border:1px solid rgba(255,255,255,0.8); cursor:pointer; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.4); transition: box-shadow var(--pl-dur) var(--pl-ease), transform var(--pl-dur) var(--pl-ease); }
+            .pl-color-box:hover { transform: scale(1.1); }
+            .pl-color-box.checked { border:2px solid #fff!important; box-shadow: 0 0 0 2px ${color}, 0 2px 8px ${color}40; }
+            @media (max-width:760px) {
+                .pl-setting-row { grid-template-columns:1fr; }
+                .pl-setting-fields { grid-template-columns:1fr; }
+            }
             .pl-close:focus { outline: 0; box-shadow: none; }
             .tag-danger {color:#cc3235;margin: 0 5px;}
-            .pl-tooltip { position: absolute; color: #ffffff; max-width: 600px; font-size: 12px; padding: 8px 10px; background: rgba(0,0,0,.75); border-radius: 6px; z-index: 110000; line-height: 1.4; display:none; word-break: break-all; box-shadow: 0 6px 16px rgba(0,0,0,.12);}
+            .pl-tooltip { position: absolute; color: #ffffff; max-width: 600px; font-family: var(--pl-font); font-size: 12px; padding: 8px 10px; background: rgba(20,28,44,0.72); backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--pl-radius-tag); z-index: 110000; line-height: 1.4; display:none; word-break: break-all; box-shadow: 0 6px 16px rgba(0,0,0,0.2);}
              @keyframes load { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
             .pl-loading-box > div > div { position: absolute;border-radius: 50%;}
             .pl-loading-box > div > div:nth-child(1) { top: 9px;left: 9px;width: 82px;height: 82px;background: #ffffff;}
@@ -657,16 +752,14 @@
             .pl-loading { width: 16px;height: 16px;display: inline-block;overflow: hidden;background: none;}
             .pl-loading-box { width: 100%;height: 100%;position: relative;transform: translateZ(0) scale(0.16);backface-visibility: hidden;transform-origin: 0 0;}
             .pl-loading-box div { box-sizing: content-box; }
-            .swal2-container { z-index:100000!important; }
-            body.swal2-height-auto { height: inherit!important; }
-            .pl-rename-input:focus { border-color:#4096ff!important; box-shadow:0 0 0 2px rgba(5,145,255,.1); }
+            .pl-rename-input:focus { border-color:#4096ff!important; box-shadow:0 0 0 2px rgba(5,145,255,.16); }
+            .pl-rename-preview-table td,
+            .pl-rename-preview-table td * { user-select:text!important; -webkit-user-select:text!important; }
             .btn-operate .btn-main { display:flex; align-items:center; }
-            /* 云一朵/AI助手入口：保留注释，便于后续恢复。 */
-            .wp-custom-input-wrap,
-            .wp-custom-yunyiduo,
-            .bottom-chat-ai-wrapper,
-            .nd-ai-tools-iframe,
-            .wp-s-core-pan.yunyiduo-guide-show { display: none !important; }
+            .pl-iina-button { position: fixed; top: 76px; right: 24px; z-index: 99999; display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 15px; border: 1px solid var(--pl-glass-border); border-radius: var(--pl-radius-ctrl); background: var(--pl-glass-bg); backdrop-filter: var(--pl-glass-blur); -webkit-backdrop-filter: var(--pl-glass-blur); color: ${color}; font-family: var(--pl-font); font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 16px ${color}40, 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.5); transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease); }
+            .pl-iina-button:hover { transform: translateY(-1px); box-shadow: 0 6px 20px ${color}55, 0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.5); }
+            .pl-iina-button:disabled { cursor: wait; opacity: .65; }
+            .pl-iina-button-icon { font-size: 12px; line-height: 1; }
             `;
             this.addStyle('panlinker-style', 'style', css);
         },
@@ -712,22 +805,31 @@
 
         setBDUSS() {
             return new Promise((resolve) => {
-                try {
-                    if (!GM_cookie) {
+                const finish = (cookies, error) => {
+                    if (error) {
                         resolve('');
                         return;
                     }
-                    GM_cookie('list', {name: 'BDUSS'}, (cookies, error) => {
-                        if (!error) {
-                            let BDUSS = cookies?.[0]?.value || '';
-                            if (BDUSS) {
-                                base.setStorage("baiduyunPlugin_BDUSS", {BDUSS});
-                            }
-                            resolve(BDUSS);
-                            return;
-                        }
+                    const BDUSS = (cookies || []).find(cookie => cookie?.name === 'BDUSS' && cookie.value)?.value || '';
+                    if (BDUSS) {
+                        base.setStorage('baiduyunPlugin_BDUSS', {BDUSS});
+                    }
+                    resolve(BDUSS);
+                };
+                try {
+                    if (typeof GM_cookie === 'undefined') {
                         resolve('');
-                    });
+                        return;
+                    }
+                    if (typeof GM_cookie.list === 'function') {
+                        GM_cookie.list({name: 'BDUSS'}, finish);
+                        return;
+                    }
+                    if (typeof GM_cookie === 'function') {
+                        GM_cookie('list', {name: 'BDUSS'}, finish);
+                        return;
+                    }
+                    resolve('');
                 } catch (e) {
                     resolve('');
                 }
@@ -776,6 +878,19 @@
                 link: LOCAL_PAN_CONFIG.assistant,
                 text: LOCAL_PAN_CONFIG.tampermonkeyTip
             };
+        },
+
+        buildIINAUrl(link) {
+            const params = new URLSearchParams({
+                url: link,
+                new_window: '1',
+                'mpv_user-agent': LOCAL_PAN_CONFIG.ua
+            });
+            const BDUSS = this.getBDUSS();
+            if (BDUSS) {
+                params.set('mpv_http-header-fields', `Cookie: BDUSS=${BDUSS}`);
+            }
+            return `iina://open?${params.toString()}`;
         },
 
         addPageListener() {
@@ -916,8 +1031,11 @@
                 if (!target.dataset.link) {
                     $(target).removeClass('listener-copy-all').addClass('pl-btn-danger').html(`${LOCAL_PAN_CONFIG.tampermonkeyTip}👉<a href="${LOCAL_PAN_CONFIG.assistant}" target="_blank" class="pl-a">点击此处安装</a>👈`);
                 } else {
-                    base.setClipboard(decodeURIComponent(target.dataset.link));
-                    $(target).text('复制成功，快去粘贴吧！').animate({opacity: '0.5'}, "slow");
+                    if (base.setClipboard(decodeURIComponent(target.dataset.link))) {
+                        $(target).text('复制成功，快去粘贴吧！').animate({opacity: '0.5'}, "slow");
+                    } else {
+                        message.error('复制失败，请检查浏览器剪贴板权限！');
+                    }
                 }
             });
             doc.on('click', '.listener-link-rpc', async (e) => {
@@ -944,6 +1062,37 @@
             });
             doc.on('click', '.listener-batch-rename', () => {
                 this.showBatchRenameDialog();
+            });
+            doc.on('click', '.listener-iina-play', async (e) => {
+                const target = e.currentTarget;
+                if (target.dataset.busy === '1') return;
+                if (pt === 'share') {
+                    return message.warning('提示：请先保存到我的网盘后再用 IINA 播放！');
+                }
+                const selected = this.getSelectedList() || [];
+                if (selected.length !== 1) {
+                    return message.warning('提示：请选择一个视频文件！');
+                }
+                const fileItem = selected[0];
+                if (+fileItem.isdir === 1) {
+                    return message.warning('提示：文件夹不能用 IINA 播放！');
+                }
+                const filename = fileItem.server_filename || fileItem.filename || '';
+                if (fileItem.mediaType !== 'video' && !/\.(mp4|mkv|avi|mov|wmv|flv|m4v|ts|m2ts|webm|rmvb|mpeg|mpg|3gp)$/i.test(filename)) {
+                    return message.warning('提示：请选择视频文件！');
+                }
+                target.dataset.busy = '1';
+                try {
+                    await this.setBDUSS();
+                    if (!this.getBDUSS()) throw new Error('未读取到百度登录 Cookie，请刷新后重试');
+                    const link = await this.getFilePCSLink(fileItem);
+                    location.href = this.buildIINAUrl(link);
+                    message.success('已发送到 IINA 播放！');
+                } catch (error) {
+                    message.error(`提示：${error?.message || 'IINA 播放失败，请刷新后重试！'}`);
+                } finally {
+                    target.dataset.busy = '0';
+                }
             });
             doc.on('click', '.listener-rpc-task', () => {
                 const rpc = {
@@ -1006,35 +1155,50 @@
             if (!pt) return;
             this.addPageListener();
             let $toolWrap;
-            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
+            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
             if (pt === 'main') {
                 $toolWrap = $(LOCAL_PAN_CONFIG.btn.main);
                 $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: ${color};border-color: ${color};font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.newX : ''}</ul></div>`);
+                $button.find('.listener-batch-rename').before('<li class="sub cursor-p listener-iina-play">用 IINA 播放</li>');
             }
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
             if (!$toolWrap.length || $toolWrap.children('.pl-button').length) return;
             $toolWrap.prepend($button);
         },
 
-        buildSeasonRename(filename, seasonCode, deleteText = '') {
-            if (/^S\d+E\d+(?:\s|\.|$)/i.test(filename)) return null;
-            const match = filename.match(/^(\d+)(.*)$/);
-            if (!match) return null;
-            const episodeCode = String(Number(match[1])).padStart(2, '0');
-            let suffix = match[2];
+        applyRenameDeleteText(text, deleteText) {
+            let result = text;
             if (deleteText) {
                 deleteText.split(/\s+/).filter(Boolean).forEach((text) => {
                     if (text === '\\s') {
-                        suffix = suffix.replace(/\s+/g, '');
+                        result = result.replace(/\s+/g, '');
                         return;
                     }
                     const escapedText = text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                    suffix = suffix.replace(new RegExp(escapedText, 'gi'), '');
+                    result = result.replace(new RegExp(escapedText, 'gi'), '');
                 });
-                suffix = suffix.replace(/\s{2,}/g, ' ').replace(/\s+(\.[^./\\]+)$/, '$1');
+                result = result.replace(/\s{2,}/g, ' ').trimEnd();
             }
-            return `S${seasonCode}E${episodeCode}${suffix}`;
+            return result;
+        },
+
+        buildSeasonRename(filename, seasonCode, deleteText = '', useSeason = true, useDeleteText = true) {
+            if (!useSeason && (!useDeleteText || !deleteText)) return null;
+            const extMatch = filename.match(/(\.[^./\\]+)$/);
+            const extension = extMatch?.[1] || '';
+            const stem = extension ? filename.slice(0, -extension.length) : filename;
+
+            if (!useSeason) {
+                const newname = `${this.applyRenameDeleteText(stem, deleteText)}${extension}`;
+                return newname !== filename ? newname : null;
+            }
+            if (/^S\d+E\d+(?:\s|\.|$)/i.test(filename)) return null;
+            const match = stem.match(/^(\d+)(.*)$/);
+            if (!match) return null;
+            const episodeCode = String(Number(match[1])).padStart(2, '0');
+            const suffix = useDeleteText ? this.applyRenameDeleteText(match[2], deleteText) : match[2];
+            return `S${seasonCode}E${episodeCode}${suffix}${extension}`;
         },
 
         getBdstoken() {
@@ -1066,9 +1230,9 @@
             const seasonDialog = await Swal.fire({
                 title: '批量更名',
                 html: `<div style="max-width:440px;margin:0 auto;text-align:left;">
-                    <label for="pl-season-number" style="display:block;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;">Season 号</label>
+                    <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;"><input id="pl-use-season" type="checkbox" checked>应用 Season 号</label>
                     <input id="pl-season-number" class="pl-rename-input" value="01" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:40px;margin:0 0 16px;padding:4px 11px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;color:#262626;font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s;">
-                    <label for="pl-delete-text" style="display:block;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;">删除字符（多个字符用空格分隔，\\s 表示空格）</label>
+                    <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:14px;line-height:22px;color:#262626;"><input id="pl-use-delete-text" type="checkbox" checked>应用删除字符（多个字符用空格分隔，\\s 表示空格）</label>
                     <input id="pl-delete-text" class="pl-rename-input" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:40px;margin:0;padding:4px 11px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;color:#262626;font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s;">
                 </div>`,
                 showCancelButton: true,
@@ -1078,68 +1242,138 @@
                 focusConfirm: false,
                 didOpen: () => {
                     const seasonInput = document.getElementById('pl-season-number');
+                    const deleteInput = document.getElementById('pl-delete-text');
+                    const seasonCheck = document.getElementById('pl-use-season');
+                    const deleteCheck = document.getElementById('pl-use-delete-text');
+                    const syncEnabled = () => {
+                        seasonInput.disabled = !seasonCheck.checked;
+                        deleteInput.disabled = !deleteCheck.checked;
+                    };
+                    seasonCheck.addEventListener('change', syncEnabled);
+                    deleteCheck.addEventListener('change', syncEnabled);
+                    syncEnabled();
                     seasonInput.focus();
                     seasonInput.select();
                 },
                 preConfirm: () => {
                     const season = document.getElementById('pl-season-number').value.trim();
                     const deleteText = document.getElementById('pl-delete-text').value.trim();
-                    if (!/^\d+$/.test(season)) {
+                    const useSeason = document.getElementById('pl-use-season').checked;
+                    const useDeleteText = document.getElementById('pl-use-delete-text').checked;
+                    if (useSeason && !/^\d+$/.test(season)) {
                         Swal.showValidationMessage('Season 号只能输入数字');
                         return false;
                     }
-                    return {season, deleteText};
+                    return {season, deleteText, useSeason, useDeleteText};
                 }
             });
             if (!seasonDialog.isConfirmed) return;
 
-            const seasonCode = String(Number(seasonDialog.value.season)).padStart(2, '0');
-            const deleteText = seasonDialog.value.deleteText;
-            const renameList = [];
-            const previewList = [];
-            const skippedList = [];
+            const buildPreviewData = (season, deleteText, useSeason, useDeleteText) => {
+                const seasonCode = useSeason ? String(Number(season)).padStart(2, '0') : '';
+                const renameList = [];
+                const previewList = [];
+                const skippedList = [];
 
-            selected.forEach((item) => {
-                const filename = item.server_filename || item.filename || '';
-                if (+item.isdir === 1) {
-                    skippedList.push(`${filename || '未命名项目'}（文件夹）`);
-                    return;
-                }
-                if (!item.path) {
-                    skippedList.push(`${filename || '未命名项目'}（缺少文件路径）`);
-                    return;
-                }
-                const newname = this.buildSeasonRename(filename, seasonCode, deleteText);
-                if (!newname) {
-                    skippedList.push(`${filename || '未命名项目'}（非数字开头或已完成剧集命名）`);
-                    return;
-                }
-                renameList.push({path: item.path, newname});
-                previewList.push({filename, newname});
-            });
+                selected.forEach((item) => {
+                    const filename = item.server_filename || item.filename || '';
+                    if (+item.isdir === 1) {
+                        skippedList.push(`${filename || '未命名项目'}（文件夹）`);
+                        return;
+                    }
+                    if (!item.path) {
+                        skippedList.push(`${filename || '未命名项目'}（缺少文件路径）`);
+                        return;
+                    }
+                    const newname = this.buildSeasonRename(filename, seasonCode, deleteText, useSeason, useDeleteText);
+                    if (!newname) {
+                        skippedList.push(`${filename || '未命名项目'}（当前规则不适用或名称未变化）`);
+                        return;
+                    }
+                    renameList.push({path: item.path, newname});
+                    previewList.push({filename, newname});
+                });
+                return {seasonCode, deleteText, useSeason, useDeleteText, renameList, previewList, skippedList};
+            };
+            const renderRows = (previewList) => previewList.map((item) => `<tr><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;word-break:break-all;cursor:text;">${base.escapeHtml(item.filename)}</td><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;color:#1677ff;word-break:break-all;cursor:text;">${base.escapeHtml(item.newname)}</td></tr>`).join('');
+            const renderSkipped = (skippedList) => skippedList.length ? `<div style="margin-top:12px;padding:10px 12px;background:#fff7e6;border:1px solid #ffd591;border-radius:6px;text-align:left;color:#ad6800;word-break:break-all;user-select:text;-webkit-user-select:text;">将跳过 ${skippedList.length} 项：<br>${skippedList.map(base.escapeHtml).join('<br>')}</div>` : '';
 
-            if (!renameList.length) {
+            let previewData = buildPreviewData(seasonDialog.value.season, seasonDialog.value.deleteText, seasonDialog.value.useSeason, seasonDialog.value.useDeleteText);
+            if (!previewData.renameList.length) {
                 return Swal.fire({
                     icon: 'info',
                     title: '没有可更名的文件',
-                    text: '仅处理以数字开头的文件；文件夹和已是 SxxExx 格式的文件会被跳过。',
+                    text: '当前规则没有产生名称变化；应用 Season 时仅处理数字开头且尚未采用 SxxExx 格式的文件。',
                     confirmButtonText: '知道了'
                 });
             }
 
-            const rows = previewList.map((item) => `<tr><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;word-break:break-all;">${base.escapeHtml(item.filename)}</td><td style="padding:9px 12px;border-bottom:1px solid #f0f0f0;color:#1677ff;word-break:break-all;">${base.escapeHtml(item.newname)}</td></tr>`).join('');
-            const skipped = skippedList.length ? `<div style="margin-top:12px;padding:10px 12px;background:#fff7e6;border:1px solid #ffd591;border-radius:6px;text-align:left;color:#ad6800;word-break:break-all;">将跳过 ${skippedList.length} 项：<br>${skippedList.map(base.escapeHtml).join('<br>')}</div>` : '';
+            let previewFresh = true;
             const confirmDialog = await Swal.fire({
-                title: `确认更名 ${renameList.length} 个文件？`,
-                html: `<div style="max-height:420px;overflow:auto;border:1px solid #f0f0f0;border-radius:6px;"><table style="width:100%;border-collapse:collapse;text-align:left;font-size:13px;"><thead style="position:sticky;top:0;background:#fafafa;"><tr><th style="padding:9px 12px;">原文件名</th><th style="padding:9px 12px;">新文件名</th></tr></thead><tbody>${rows}</tbody></table></div>${skipped}`,
+                title: '批量更名预览',
+                html: `<div style="margin-bottom:12px;padding:12px 14px;border:1px solid #d9d9d9;border-radius:6px;background:#fafafa;text-align:left;">
+                    <div style="display:grid;grid-template-columns:140px minmax(200px,1fr) auto;gap:10px;align-items:end;">
+                        <label style="font-size:13px;color:#262626;"><span style="display:flex;align-items:center;gap:6px;"><input id="pl-preview-use-season" type="checkbox" ${previewData.useSeason ? 'checked' : ''}>应用 Season 号</span><input id="pl-preview-season" class="pl-rename-input" value="${base.escapeAttr(previewData.seasonCode || seasonDialog.value.season)}" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:36px;margin-top:5px;padding:4px 10px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;font-size:13px;outline:none;"></label>
+                        <label style="font-size:13px;color:#262626;"><span style="display:flex;align-items:center;gap:6px;"><input id="pl-preview-use-delete-text" type="checkbox" ${previewData.useDeleteText ? 'checked' : ''}>应用删除字符</span><input id="pl-preview-delete-text" class="pl-rename-input" value="${base.escapeAttr(previewData.deleteText)}" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:36px;margin-top:5px;padding:4px 10px;box-sizing:border-box;border:1px solid #d9d9d9;border-radius:6px;background:#fff;font-size:13px;outline:none;"></label>
+                        <button id="pl-refresh-rename-preview" type="button" class="pl-btn-primary" style="height:36px;margin:0;white-space:nowrap;">刷新预览</button>
+                    </div>
+                    <div id="pl-rename-preview-status" style="margin-top:8px;font-size:12px;color:#8c8c8c;">当前规则：${previewData.useSeason ? `S${base.escapeHtml(previewData.seasonCode)}` : '不添加 Season'}，${previewData.useDeleteText ? `删除字符：${base.escapeHtml(previewData.deleteText || '无')}` : '不删除字符'}</div>
+                </div>
+                <div style="max-height:360px;overflow:auto;border:1px solid #f0f0f0;border-radius:6px;"><table class="pl-rename-preview-table" style="width:100%;border-collapse:collapse;text-align:left;font-size:13px;"><thead style="position:sticky;top:0;background:#fafafa;z-index:1;"><tr><th style="padding:9px 12px;">原文件名</th><th style="padding:9px 12px;">新文件名</th></tr></thead><tbody id="pl-rename-preview-body">${renderRows(previewData.previewList)}</tbody></table></div><div id="pl-rename-preview-skipped">${renderSkipped(previewData.skippedList)}</div>`,
                 width: 760,
                 showCancelButton: true,
                 confirmButtonText: '确认更名',
                 cancelButtonText: '取消',
                 showCloseButton: true,
-                focusCancel: true
+                focusCancel: true,
+                didOpen: () => {
+                    const seasonInput = document.getElementById('pl-preview-season');
+                    const deleteInput = document.getElementById('pl-preview-delete-text');
+                    const seasonCheck = document.getElementById('pl-preview-use-season');
+                    const deleteCheck = document.getElementById('pl-preview-use-delete-text');
+                    const refreshButton = document.getElementById('pl-refresh-rename-preview');
+                    const status = document.getElementById('pl-rename-preview-status');
+                    const markChanged = () => {
+                        previewFresh = false;
+                        status.textContent = '规则已修改，请刷新预览';
+                        status.style.color = '#d46b08';
+                    };
+                    seasonInput.addEventListener('input', markChanged);
+                    deleteInput.addEventListener('input', markChanged);
+                    seasonCheck.addEventListener('change', markChanged);
+                    deleteCheck.addEventListener('change', markChanged);
+                    refreshButton.addEventListener('click', () => {
+                        const season = seasonInput.value.trim();
+                        const deleteText = deleteInput.value.trim();
+                        const useSeason = seasonCheck.checked;
+                        const useDeleteText = deleteCheck.checked;
+                        if (useSeason && !/^\d+$/.test(season)) {
+                            status.textContent = 'Season 号只能输入数字';
+                            status.style.color = '#ff4d4f';
+                            return;
+                        }
+                        previewData = buildPreviewData(season, deleteText, useSeason, useDeleteText);
+                        document.getElementById('pl-rename-preview-body').innerHTML = renderRows(previewData.previewList);
+                        document.getElementById('pl-rename-preview-skipped').innerHTML = renderSkipped(previewData.skippedList);
+                        previewFresh = true;
+                        status.textContent = `当前规则：${useSeason ? `S${previewData.seasonCode}` : '不添加 Season'}，${useDeleteText ? `删除字符：${deleteText || '无'}` : '不删除字符'}，可更名 ${previewData.renameList.length} 个文件`;
+                        status.style.color = previewData.renameList.length ? '#389e0d' : '#ff4d4f';
+                    });
+                },
+                preConfirm: () => {
+                    if (!previewFresh) {
+                        Swal.showValidationMessage('规则已修改，请先刷新预览');
+                        return false;
+                    }
+                    if (!previewData.renameList.length) {
+                        Swal.showValidationMessage('当前规则下没有可更名的文件');
+                        return false;
+                    }
+                    return previewData;
+                }
             });
             if (!confirmDialog.isConfirmed) return;
+            const {renameList, skippedList} = confirmDialog.value;
 
             const bdstoken = this.getBdstoken();
             if (!bdstoken) {
@@ -1189,8 +1423,11 @@
                     showCloseButton: true
                 });
                 if (errorDialog.isConfirmed) {
-                    base.setClipboard(errorInfo);
-                    message.success('错误信息已复制到剪贴板！');
+                    if (base.setClipboard(errorInfo)) {
+                        message.success('错误信息已复制到剪贴板！');
+                    } else {
+                        message.error('复制失败，请检查浏览器剪贴板权限！');
+                    }
                 }
             }
         },
@@ -1256,7 +1493,7 @@
             return accessToken;
         },
 
-        async getPCSLink(maxRequestTime = 1, customList = null) {
+        async getPCSLink(maxRequestTime = 1, customList = null, downloadMode = mode) {
             selectList = customList || this.getSelectedList();
             let fidList = this._getFidList(), url, res;
 
@@ -1297,15 +1534,21 @@
                 return;
             }
             if (res.errno === 0) {
-                let html = this.generateDom(res.list);
-                this.showMainDialog(pan[mode][0], html, pan[mode][1]);
+                const generated = this.generateDom(res.list, downloadMode);
+                this.showMainDialog(
+                    pan[downloadMode][0],
+                    generated.html,
+                    pan[downloadMode][1],
+                    downloadMode,
+                    generated.clipboardText
+                );
             } else if (res.errno === 112) {
                 return message.error('提示：页面过期，请刷新重试！');
             } else if (res.errno === 9019) {
                 maxRequestTime--;
                 await this.getToken();
                 if (maxRequestTime > 0) {
-                    await this.getPCSLink(maxRequestTime);
+                    await this.getPCSLink(maxRequestTime, customList, downloadMode);
                 } else {
                     message.error('提示：获取下载链接失败！请刷新网页后重试！');
                 }
@@ -1315,7 +1558,66 @@
             }
         },
 
-        generateDom(list) {
+        async getFilePCSLink(fileItem, maxRequestTime = 1) {
+            if (!fileItem?.fs_id) throw new Error('未读取到文件信息');
+            const accessToken = base.getValue('baidu_access_token') || await this.getToken();
+            if (!accessToken) throw new Error('未获取到百度授权信息');
+            const url = `${LOCAL_PAN_CONFIG.pcs[0]}&fsids=${encodeURIComponent(`[${fileItem.fs_id}]`)}&access_token=${encodeURIComponent(accessToken)}`;
+            const res = await base.get(url, {"User-Agent": LOCAL_PAN_CONFIG.ua});
+            if (res?.errno === 9019) {
+                base.deleteValue('baidu_access_token');
+                if (maxRequestTime > 0) {
+                    await this.getToken();
+                    return this.getFilePCSLink(fileItem, maxRequestTime - 1);
+                }
+                throw new Error('百度授权已过期，请重新点击后完成授权');
+            }
+            if (res?.errno !== 0 || !res?.list?.[0]?.dlink) {
+                throw new Error(res?.errmsg || '获取视频原始地址失败');
+            }
+            return `${res.list[0].dlink}&access_token=${accessToken}`;
+        },
+
+        async getVideoPagePCSLink() {
+            const filePath = new URLSearchParams(location.search).get('path');
+            if (!filePath) throw new Error('未读取到当前视频路径');
+
+            const metaUrl = `https://pan.baidu.com/api/filemetas?target=${encodeURIComponent(JSON.stringify([filePath]))}&dlink=1`;
+            const metaRes = await base.get(metaUrl, {"User-Agent": LOCAL_PAN_CONFIG.ua});
+            const fileInfo = metaRes?.info?.[0];
+            if (metaRes?.errno !== 0 || !fileInfo?.fs_id) {
+                throw new Error(metaRes?.errmsg || '未读取到当前视频信息');
+            }
+            return this.getFilePCSLink(fileInfo);
+        },
+
+        addIINAButton() {
+            if (document.querySelector('.pl-iina-button')) return;
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.className = 'pl-iina-button';
+            button.innerHTML = '<span class="pl-iina-button-icon">▶</span><span>用 IINA 播放</span>';
+            button.addEventListener('click', async () => {
+                if (button.disabled) return;
+                button.disabled = true;
+                button.lastElementChild.textContent = '正在获取原始地址';
+                try {
+                    await this.setBDUSS();
+                    if (!this.getBDUSS()) throw new Error('未读取到百度登录 Cookie，请刷新后重试');
+                    const link = await this.getVideoPagePCSLink();
+                    location.href = this.buildIINAUrl(link);
+                    message.success('已发送到 IINA 播放！');
+                } catch (e) {
+                    message.error(`提示：${e?.message || 'IINA 播放失败，请刷新后重试！'}`);
+                } finally {
+                    button.disabled = false;
+                    button.lastElementChild.textContent = '用 IINA 播放';
+                }
+            });
+            document.body.appendChild(button);
+        },
+
+        generateDom(list, downloadMode = mode) {
             let content = '<div class="pl-main"><div class="pl-table-head"><div class="pl-th-name">文件名</div><div class="pl-th-size">大小</div><div class="pl-th-action">操作</div></div>';
             let alinkAllText = '';
             base.sortByName(list);
@@ -1331,7 +1633,7 @@
                 let dlink = v.dlink + '&access_token=' + base.getValue('baidu_access_token');
                 let dlinkAttr = base.escapeAttr(dlink);
                 let dlinkText = base.escapeHtml(dlink);
-                if (mode === 'api') {
+                if (downloadMode === 'api') {
                     content += `<div class="pl-item">
                                 <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
                                 <div class="pl-item-size">${safeSize}</div>
@@ -1349,7 +1651,7 @@
                                     <span class="pl-progress-how listener-how">下载说明</span>
                                 </div></div>`;
                 }
-                if (mode === 'aria') {
+                if (downloadMode === 'aria') {
                     let alink = this.convertLinkToAria(dlink, filename, LOCAL_PAN_CONFIG.ua);
                     if (typeof (alink) === 'object') {
                         content += `<div class="pl-item">
@@ -1366,13 +1668,13 @@
                                 <a class="pl-item-link pl-a listener-link-aria" href="${alinkAttr}" title="点击复制aria2c链接" data-filename="${filenameAttr}" data-link="${alinkAttr}">${alinkText}</a> </div>`;
                     }
                 }
-                if (mode === 'rpc') {
+                if (downloadMode === 'rpc') {
                     content += `<div class="pl-item">
                                 <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
                                 <div class="pl-item-size">${safeSize}</div>
                                 <button class="pl-item-link listener-link-rpc pl-btn-primary pl-btn-info" data-filename="${filenameAttr}" data-link="${dlinkAttr}"><em class="icon icon-device"></em><span style="margin-left: 5px;">推送到 RPC 下载器</span></button></div>`;
                 }
-                if (mode === 'curl') {
+                if (downloadMode === 'curl') {
                     let alink = this.convertLinkToCurl(dlink, filename, LOCAL_PAN_CONFIG.ua);
                     if (typeof (alink) === 'object') {
                         content += `<div class="pl-item">
@@ -1389,7 +1691,7 @@
                                 <a class="pl-item-link pl-a listener-link-aria" href="${alinkAttr}" title="点击复制curl链接" data-filename="${filenameAttr}" data-link="${alinkAttr}">${alinkText}</a> </div>`;
                     }
                 }
-                if (mode === 'bc') {
+                if (downloadMode === 'bc') {
                     let alink = this.convertLinkToBC(dlink, filename, LOCAL_PAN_CONFIG.ua);
                     if (typeof (alink) === 'object') {
                         content += `<div class="pl-item">
@@ -1408,15 +1710,18 @@
                 }
             });
             content += '</div>';
-            if (mode === 'aria')
+            if (downloadMode === 'aria')
                 content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-link="${base.escapeAttr(encodeURIComponent(alinkAllText))}">复制全部链接</button></div>`;
-            if (mode === 'rpc') {
+            if (downloadMode === 'rpc') {
                 let rpc = base.getValue('setting_rpc_domain') + ':' + base.getValue('setting_rpc_port') + base.getValue('setting_rpc_path');
                 content += `<div class="pl-extra"><button class="pl-btn-primary listener-send-rpc">发送全部链接</button><button title="${rpc}" class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px">设置 RPC 参数（当前为：${rpc}）</button><button class="pl-btn-primary pl-btn-success listener-rpc-task" style="margin-left: 10px;display: none">查看下载任务</button></div>`;
             }
-            if (mode === 'curl')
+            if (downloadMode === 'curl')
                 content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-link="${base.escapeAttr(encodeURIComponent(alinkAllText))}">复制全部链接</button><button class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px;">设置终端类型（当前为：${terminalType[base.getValue('setting_terminal_type')]}）</button></div>`;
-            return content;
+            return {
+                html: content,
+                clipboardText: downloadMode === 'aria' || downloadMode === 'curl' ? alinkAllText : ''
+            };
         },
 
         async sendLinkToRPC(filename, link) {
@@ -1597,12 +1902,13 @@
             let path = location.pathname;
             if (/^\/disk\/home/.test(path)) return 'home';
             if (/^\/disk\/main/.test(path)) return 'main';
+            if (/^\/pfile\/video/.test(path)) return 'video';
             if (/^\/(s|share)\//.test(path)) return 'share';
             return '';
             return '';
         },
 
-        showMainDialog(title, html, footer) {
+        showMainDialog(title, html, footer, downloadMode, clipboardText = '') {
             Swal.fire({
                 title,
                 html,
@@ -1617,17 +1923,15 @@
             }).then(() => {
                 this._resetData();
             });
-            if (mode === 'aria') {
-                const temp = document.createElement('textarea');
-                temp.value = decodeURIComponent($('.listener-copy-all').data('link') || '');
-                temp.setAttribute('readonly', 'readonly');
-                temp.style.position = 'absolute';
-                temp.style.left = '-9999px';
-                document.body.appendChild(temp);
-                temp.select();
-                document.execCommand('copy');
-                document.body.removeChild(temp);
-                message.success('aria2c 链接已自动复制到剪切板！');
+            if (downloadMode === 'aria') {
+                if (!clipboardText.trim()) {
+                    message.error('未读取到百度登录 Cookie，无法生成 aria2c 命令，请刷新百度网盘后重试！');
+                    return;
+                }
+                const copied = base.setClipboard(clipboardText);
+                copied
+                    ? message.success('aria2c 链接已自动复制到剪切板！')
+                    : message.error('自动复制失败，请点击“复制全部链接”重试！');
                 if (nativeDownloadRow) {
                     setTimeout(() => {
                         this.tryUnselectRowFromDom(nativeDownloadRow);
@@ -1640,19 +1944,24 @@
         async initPanLinker() {
             base.initDefaultConfig();
             base.addPanLinkerStyle();
-            base.removeYunyiduo();
-            if (!window.__plYunyiduoObserver) {
-                window.__plYunyiduoObserver = new MutationObserver(() => base.removeYunyiduo());
-                window.__plYunyiduoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
-            }
-            if (!yunyiduoTimer) {
-                yunyiduoTimer = setInterval(() => base.removeYunyiduo(), 1000);
-            }
             pt = this.detectPage();
             pan = LOCAL_PAN_CONFIG;
             base.setValue('setting_init_code', LOCAL_PAN_CONFIG.num);
             base.setValue('license', LOCAL_PAN_CONFIG.license);
-            // 云一朵相关入口屏蔽，保留这一段便于后续恢复。
+            if (pt === 'video') {
+                this.addIINAButton();
+                base.registerMenuCommand();
+                return;
+            }
+            base.removeFilteredElements();
+            if (!window.__plYunyiduoObserver) {
+                window.__plYunyiduoObserver = new MutationObserver(() => base.removeFilteredElements());
+                window.__plYunyiduoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
+            }
+            if (!yunyiduoTimer) {
+                yunyiduoTimer = setInterval(() => base.removeFilteredElements(), 1000);
+            }
+            // 页面过滤规则可在助手设置中修改，默认保留现有广告与云一朵规则。
             this.addButton();
             base.createTip();
             base.registerMenuCommand();
