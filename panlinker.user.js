@@ -715,6 +715,9 @@
             .pl-btn-info { background: #1677ff; }
             .pl-btn-warning { background: #faad14; }
             .pl-btn-danger { background: #ff4d4f; }
+            .pl-rename-preview-name { padding: 9px 12px; border-bottom: 1px solid rgba(0,0,0,0.04); color: #1677ff; word-break: break-all; cursor: text; }
+            .pl-rename-preview-name:hover { background: rgba(22,119,255,0.06); }
+            .pl-rename-inline-input { display: block; width: 100%; min-width: 0; max-width: 100%; height: 32px; padding: 4px 8px; box-sizing: border-box; border: 1px solid #1677ff; border-radius: 6px; background: rgba(255,255,255,0.9); color: var(--pl-text-1); font: inherit; outline: none; box-shadow: 0 0 0 2px rgba(22,119,255,0.12); }
             .pl-dropdown-menu {position: absolute;right: 0;top: 36px;padding: 6px 0;color: var(--pl-text-1);background: var(--pl-glass-bg);backdrop-filter: var(--pl-glass-blur);-webkit-backdrop-filter: var(--pl-glass-blur);z-index: 999;width: 132px;border: 1px solid var(--pl-glass-border);border-radius: var(--pl-radius-card); box-shadow: var(--pl-shadow-sm), var(--pl-shadow-lg);}
             .pl-dropdown-menu-item { height: 34px;display: flex;align-items: center;justify-content: center;cursor:pointer; padding: 0 12px; transition: background-color 0.16s var(--pl-ease); }
             .pl-dropdown-menu-item:hover { background-color: rgba(0,0,0,0.06);}
@@ -1206,11 +1209,33 @@
                 return newname !== filename ? newname : null;
             }
             if (/^S\d+E\d+(?:\s|\.|$)/i.test(filename)) return null;
-            const match = stem.match(/^(\d+)(.*)$/);
+            const match = stem.match(/^(?:E\s*)?(\d+)(.*)$/i);
             if (!match) return null;
             const episodeCode = String(Number(match[1])).padStart(2, '0');
             const suffix = useDeleteText ? this.applyRenameDeleteText(match[2], deleteText) : match[2];
             return `S${seasonCode}E${episodeCode}${suffix}${extension}`;
+        },
+
+        buildSmartRename(filename, seasonCode = '01') {
+            const extMatch = filename.match(/(\.[^./\\]+)$/);
+            const extension = extMatch?.[1] || '';
+            const stem = extension ? filename.slice(0, -extension.length) : filename;
+            const taggedEpisode = stem.match(/S\s*\d+\s*E\s*0*(\d{1,3})/i)
+                || stem.match(/(?:^|[^a-z0-9])(?:episode|ep|e)\s*0*(\d{1,3})(?=$|[^a-z0-9])/i)
+                || stem.match(/第\s*0*(\d{1,3})\s*集/i);
+            let episode = taggedEpisode?.[1] || '';
+
+            if (!episode) {
+                const cleanedStem = stem
+                    .replace(/\b(?:[248]k|\d{3,4}[pi]|(?:19|20)\d{2})\b/gi, ' ')
+                    .replace(/[\-~|｜]+/g, ' ');
+                const numberMatch = cleanedStem.match(/(?:^|\D)0*(\d{1,3})(?=\D|$)/);
+                episode = numberMatch?.[1] || '';
+            }
+            if (!episode) return null;
+
+            const episodeCode = String(Number(episode)).padStart(2, '0');
+            return `S${seasonCode || '01'}E${episodeCode}${extension}`;
         },
 
         getBdstoken() {
@@ -1245,10 +1270,12 @@
                     <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:14px;line-height:22px;color:rgba(20,28,44,0.92);"><input id="pl-use-season" type="checkbox" checked>应用 Season 号</label>
                     <input id="pl-season-number" class="pl-rename-input" value="01" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:40px;margin:0 0 16px;padding:4px 11px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);color:rgba(20,28,44,0.92);font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;">
                     <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:14px;line-height:22px;color:rgba(20,28,44,0.92);"><input id="pl-use-delete-text" type="checkbox" checked>应用删除字符（多个字符用空格分隔，\\s 表示空格）</label>
-                    <input id="pl-delete-text" class="pl-rename-input" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:40px;margin:0;padding:4px 11px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);color:rgba(20,28,44,0.92);font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;">
+                    <input id="pl-delete-text" class="pl-rename-input" value="4k \\s - ~ | ｜" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:40px;margin:0;padding:4px 11px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);color:rgba(20,28,44,0.92);font-size:14px;line-height:1.5;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;">
                 </div>`,
                 showCancelButton: true,
+                showDenyButton: true,
                 confirmButtonText: '生成预览',
+                denyButtonText: '智能改名',
                 cancelButtonText: '取消',
                 showCloseButton: true,
                 focusConfirm: false,
@@ -1277,12 +1304,26 @@
                         return false;
                     }
                     return {season, deleteText, useSeason, useDeleteText};
+                },
+                preDeny: () => {
+                    const season = document.getElementById('pl-season-number').value.trim();
+                    const deleteText = document.getElementById('pl-delete-text').value.trim();
+                    const useSeason = document.getElementById('pl-use-season').checked;
+                    const useDeleteText = document.getElementById('pl-use-delete-text').checked;
+                    if (useSeason && season && !/^\d+$/.test(season)) {
+                        Swal.showValidationMessage('Season 号只能输入数字');
+                        return false;
+                    }
+                    return {season, deleteText, useSeason, useDeleteText};
                 }
             });
-            if (!seasonDialog.isConfirmed) return;
+            if (!seasonDialog.isConfirmed && !seasonDialog.isDenied) return;
+            const renameMode = seasonDialog.isDenied ? 'smart' : 'standard';
 
-            const buildPreviewData = (season, deleteText, useSeason, useDeleteText) => {
-                const seasonCode = useSeason ? String(Number(season)).padStart(2, '0') : '';
+            const buildPreviewData = (season, deleteText, useSeason, useDeleteText, mode = 'standard') => {
+                const seasonCode = mode === 'smart'
+                    ? (useSeason && season ? String(Number(season)).padStart(2, '0') : '01')
+                    : (useSeason ? String(Number(season)).padStart(2, '0') : '');
                 const renameList = [];
                 const previewList = [];
                 const skippedList = [];
@@ -1297,41 +1338,54 @@
                         skippedList.push(`${filename || '未命名项目'}（缺少文件路径）`);
                         return;
                     }
-                    const newname = this.buildSeasonRename(filename, seasonCode, deleteText, useSeason, useDeleteText);
+                    const newname = mode === 'smart'
+                        ? this.buildSmartRename(filename, seasonCode)
+                        : this.buildSeasonRename(filename, seasonCode, deleteText, useSeason, useDeleteText);
                     if (!newname) {
-                        skippedList.push(`${filename || '未命名项目'}（当前规则不适用或名称未变化）`);
+                        skippedList.push(`${filename || '未命名项目'}（${mode === 'smart' ? '未识别到 Episode 编号' : '当前规则不适用或名称未变化'}）`);
+                        return;
+                    }
+                    if (newname === filename) {
+                        skippedList.push(`${filename || '未命名项目'}（名称无需变化）`);
                         return;
                     }
                     renameList.push({path: item.path, newname});
-                    previewList.push({filename, newname});
+                    previewList.push({path: item.path, filename, newname});
                 });
-                return {seasonCode, deleteText, useSeason, useDeleteText, renameList, previewList, skippedList};
+                return {mode, seasonCode, deleteText, useSeason, useDeleteText, renameList, previewList, skippedList};
             };
-            const renderRows = (previewList) => previewList.map((item) => `<tr><td style="padding:9px 12px;border-bottom:1px solid rgba(0,0,0,0.04);word-break:break-all;cursor:text;">${base.escapeHtml(item.filename)}</td><td style="padding:9px 12px;border-bottom:1px solid rgba(0,0,0,0.04);color:#1677ff;word-break:break-all;cursor:text;">${base.escapeHtml(item.newname)}</td></tr>`).join('');
+            const renderRows = (previewList) => previewList.map((item, index) => `<tr><td style="padding:9px 12px;border-bottom:1px solid rgba(0,0,0,0.04);word-break:break-all;cursor:text;">${base.escapeHtml(item.filename)}</td><td class="pl-rename-preview-name" data-index="${index}" title="点击编辑，按 Enter 保存">${base.escapeHtml(item.newname)}</td></tr>`).join('');
             const renderSkipped = (skippedList) => skippedList.length ? `<div style="margin-top:12px;padding:10px 12px;background:rgba(255,247,230,0.7);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border:1px solid rgba(255,213,145,0.6);border-radius:6px;text-align:left;color:#ad6800;word-break:break-all;user-select:text;-webkit-user-select:text;">将跳过 ${skippedList.length} 项：<br>${skippedList.map(base.escapeHtml).join('<br>')}</div>` : '';
 
-            let previewData = buildPreviewData(seasonDialog.value.season, seasonDialog.value.deleteText, seasonDialog.value.useSeason, seasonDialog.value.useDeleteText);
+            let previewData = buildPreviewData(seasonDialog.value.season, seasonDialog.value.deleteText, seasonDialog.value.useSeason, seasonDialog.value.useDeleteText, renameMode);
             if (!previewData.renameList.length) {
                 return Swal.fire({
                     icon: 'info',
                     title: '没有可更名的文件',
-                    text: '当前规则没有产生名称变化；应用 Season 时仅处理数字开头且尚未采用 SxxExx 格式的文件。',
+                    text: renameMode === 'smart' ? '没有从所选文件名中识别到 Episode 编号。' : '当前规则没有产生名称变化；应用 Season 时仅处理数字或 E+数字开头且尚未采用 SxxExx 格式的文件。',
                     confirmButtonText: '知道了'
                 });
             }
 
             let previewFresh = true;
-            const confirmDialog = await Swal.fire({
-                title: '批量更名预览',
-                html: `<div style="margin-bottom:12px;padding:12px 14px;border:1px solid rgba(255,255,255,0.5);border-radius:8px;background:rgba(255,255,255,0.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);text-align:left;">
-                    <div style="display:grid;grid-template-columns:140px minmax(200px,1fr) auto;gap:10px;align-items:end;">
+            let commitActivePreviewEdit = null;
+            const renderRuleControls = () => previewData.mode === 'smart'
+                ? `<div style="display:grid;grid-template-columns:minmax(180px,1fr) auto;gap:10px;align-items:end;">
+                        <label style="font-size:13px;color:rgba(20,28,44,0.92);"><span style="display:flex;align-items:center;gap:6px;"><input id="pl-preview-use-season" type="checkbox" ${previewData.useSeason ? 'checked' : ''}>应用 Season 号</span><input id="pl-preview-season" class="pl-rename-input" value="${base.escapeAttr(previewData.seasonCode)}" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:36px;margin-top:5px;padding:4px 10px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;"></label>
+                        <button id="pl-refresh-rename-preview" type="button" class="pl-btn-primary" style="height:36px;margin:0;white-space:nowrap;">刷新预览</button>
+                    </div>`
+                : `<div style="display:grid;grid-template-columns:140px minmax(200px,1fr) auto;gap:10px;align-items:end;">
                         <label style="font-size:13px;color:rgba(20,28,44,0.92);"><span style="display:flex;align-items:center;gap:6px;"><input id="pl-preview-use-season" type="checkbox" ${previewData.useSeason ? 'checked' : ''}>应用 Season 号</span><input id="pl-preview-season" class="pl-rename-input" value="${base.escapeAttr(previewData.seasonCode || seasonDialog.value.season)}" inputmode="numeric" autocomplete="off" style="display:block;width:100%;height:36px;margin-top:5px;padding:4px 10px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;"></label>
                         <label style="font-size:13px;color:rgba(20,28,44,0.92);"><span style="display:flex;align-items:center;gap:6px;"><input id="pl-preview-use-delete-text" type="checkbox" ${previewData.useDeleteText ? 'checked' : ''}>应用删除字符</span><input id="pl-preview-delete-text" class="pl-rename-input" value="${base.escapeAttr(previewData.deleteText)}" placeholder="例如：4k ~ - \\s" autocomplete="off" style="display:block;width:100%;height:36px;margin-top:5px;padding:4px 10px;box-sizing:border-box;border:1px solid rgba(0,0,0,0.1);border-radius:8px;background:rgba(255,255,255,0.6);font-size:13px;outline:none;transition:border-color .2s,box-shadow .2s,background-color .2s;"></label>
                         <button id="pl-refresh-rename-preview" type="button" class="pl-btn-primary" style="height:36px;margin:0;white-space:nowrap;">刷新预览</button>
-                    </div>
-                    <div id="pl-rename-preview-status" style="margin-top:8px;font-size:12px;color:rgba(20,28,44,0.55);">当前规则：${previewData.useSeason ? `S${base.escapeHtml(previewData.seasonCode)}` : '不添加 Season'}，${previewData.useDeleteText ? `删除字符：${base.escapeHtml(previewData.deleteText || '无')}` : '不删除字符'}</div>
+                    </div>`;
+            const confirmDialog = await Swal.fire({
+                title: '批量更名预览',
+                html: `<div style="margin-bottom:12px;padding:12px 14px;border:1px solid rgba(255,255,255,0.5);border-radius:8px;background:rgba(255,255,255,0.6);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);text-align:left;">
+                    ${renderRuleControls()}
+                    <div id="pl-rename-preview-status" style="margin-top:8px;font-size:12px;color:rgba(20,28,44,0.55);">${previewData.mode === 'smart' ? `智能改名：S${base.escapeHtml(previewData.seasonCode)} + Episode` : `当前规则：${previewData.useSeason ? `S${base.escapeHtml(previewData.seasonCode)}` : '不添加 Season'}，${previewData.useDeleteText ? `删除字符：${base.escapeHtml(previewData.deleteText || '无')}` : '不删除字符'}`}</div>
                 </div>
-                <div style="max-height:360px;overflow:auto;border:1px solid rgba(0,0,0,0.06);border-radius:8px;"><table class="pl-rename-preview-table" style="width:100%;border-collapse:collapse;text-align:left;font-size:13px;"><thead style="position:sticky;top:0;background:rgba(245,247,250,0.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:1;"><tr><th style="padding:9px 12px;">原文件名</th><th style="padding:9px 12px;">新文件名</th></tr></thead><tbody id="pl-rename-preview-body">${renderRows(previewData.previewList)}</tbody></table></div><div id="pl-rename-preview-skipped">${renderSkipped(previewData.skippedList)}</div>`,
+                <div style="max-height:360px;overflow:auto;border:1px solid rgba(0,0,0,0.06);border-radius:8px;"><table class="pl-rename-preview-table" style="width:100%;table-layout:fixed;border-collapse:collapse;text-align:left;font-size:13px;"><colgroup><col style="width:62%;"><col style="width:38%;"></colgroup><thead style="position:sticky;top:0;background:rgba(245,247,250,0.7);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);z-index:1;"><tr><th style="padding:9px 12px;">原文件名</th><th style="padding:9px 12px;">新文件名</th></tr></thead><tbody id="pl-rename-preview-body">${renderRows(previewData.previewList)}</tbody></table></div><div id="pl-rename-preview-skipped">${renderSkipped(previewData.skippedList)}</div>`,
                 width: 760,
                 showCancelButton: true,
                 confirmButtonText: '确认更名',
@@ -1345,34 +1399,84 @@
                     const deleteCheck = document.getElementById('pl-preview-use-delete-text');
                     const refreshButton = document.getElementById('pl-refresh-rename-preview');
                     const status = document.getElementById('pl-rename-preview-status');
+                    const previewBody = document.getElementById('pl-rename-preview-body');
                     const markChanged = () => {
                         previewFresh = false;
                         status.textContent = '规则已修改，请刷新预览';
                         status.style.color = '#d46b08';
                     };
                     seasonInput.addEventListener('input', markChanged);
-                    deleteInput.addEventListener('input', markChanged);
                     seasonCheck.addEventListener('change', markChanged);
-                    deleteCheck.addEventListener('change', markChanged);
+                    deleteInput?.addEventListener('input', markChanged);
+                    deleteCheck?.addEventListener('change', markChanged);
+                    previewBody.addEventListener('click', (event) => {
+                        const cell = event.target.closest('.pl-rename-preview-name');
+                        if (!cell || cell.querySelector('input')) return;
+                        if (commitActivePreviewEdit && !commitActivePreviewEdit()) return;
+                        const index = Number(cell.dataset.index);
+                        const item = previewData.previewList[index];
+                        if (!item) return;
+                        const originalValue = item.newname;
+                        const input = document.createElement('input');
+                        input.className = 'pl-rename-inline-input';
+                        input.value = originalValue;
+                        cell.textContent = '';
+                        cell.appendChild(input);
+                        const finishEdit = (commit) => {
+                            if (!input.isConnected) return true;
+                            const newname = input.value.trim();
+                            if (commit && !newname) {
+                                input.focus();
+                                return false;
+                            }
+                            item.newname = commit ? newname : originalValue;
+                            const renameItem = previewData.renameList.find((entry) => entry.path === item.path);
+                            if (renameItem) renameItem.newname = item.newname;
+                            cell.textContent = item.newname;
+                            commitActivePreviewEdit = null;
+                            return true;
+                        };
+                        commitActivePreviewEdit = () => finishEdit(true);
+                        input.addEventListener('keydown', (e) => {
+                            if (e.key === 'Enter') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                finishEdit(true);
+                            } else if (e.key === 'Escape') {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                finishEdit(false);
+                            }
+                        });
+                        input.focus();
+                        input.select();
+                    });
                     refreshButton.addEventListener('click', () => {
                         const season = seasonInput.value.trim();
-                        const deleteText = deleteInput.value.trim();
+                        const deleteText = deleteInput?.value.trim() || previewData.deleteText;
                         const useSeason = seasonCheck.checked;
-                        const useDeleteText = deleteCheck.checked;
-                        if (useSeason && !/^\d+$/.test(season)) {
+                        const useDeleteText = deleteCheck?.checked ?? previewData.useDeleteText;
+                        if (useSeason && (previewData.mode !== 'smart' || season) && !/^\d+$/.test(season)) {
                             status.textContent = 'Season 号只能输入数字';
                             status.style.color = '#ff4d4f';
                             return;
                         }
-                        previewData = buildPreviewData(season, deleteText, useSeason, useDeleteText);
+                        previewData = buildPreviewData(season, deleteText, useSeason, useDeleteText, previewData.mode);
                         document.getElementById('pl-rename-preview-body').innerHTML = renderRows(previewData.previewList);
                         document.getElementById('pl-rename-preview-skipped').innerHTML = renderSkipped(previewData.skippedList);
+                        commitActivePreviewEdit = null;
                         previewFresh = true;
-                        status.textContent = `当前规则：${useSeason ? `S${previewData.seasonCode}` : '不添加 Season'}，${useDeleteText ? `删除字符：${deleteText || '无'}` : '不删除字符'}，可更名 ${previewData.renameList.length} 个文件`;
+                        status.textContent = previewData.mode === 'smart'
+                            ? `智能改名：S${previewData.seasonCode} + Episode，可更名 ${previewData.renameList.length} 个文件`
+                            : `当前规则：${useSeason ? `S${previewData.seasonCode}` : '不添加 Season'}，${useDeleteText ? `删除字符：${deleteText || '无'}` : '不删除字符'}，可更名 ${previewData.renameList.length} 个文件`;
                         status.style.color = previewData.renameList.length ? '#389e0d' : '#ff4d4f';
                     });
                 },
                 preConfirm: () => {
+                    if (commitActivePreviewEdit && !commitActivePreviewEdit()) {
+                        Swal.showValidationMessage('新文件名不能为空');
+                        return false;
+                    }
                     if (!previewFresh) {
                         Swal.showValidationMessage('规则已修改，请先刷新预览');
                         return false;
@@ -1416,7 +1520,7 @@
                 setTimeout(() => location.reload(), 1000);
             } catch (e) {
                 const errorInfo = [
-                    '网盘直链下载助手NG - 批量更名失败',
+                    '百度网盘助手 - 批量更名失败',
                     `时间：${new Date().toLocaleString()}`,
                     `更名文件数：${renameList.length}`,
                     `错误信息：${e?.message || '未知错误'}`,
