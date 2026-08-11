@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              百度网盘助手
 // @namespace         https://github.com/syhyz1990/baiduyun
-// @version           1.0.23
+// @version           1.0.24
 // @author            Roc Deng
 // @description       支持批量获取百度网盘直链下载地址，脚本拉取文件后由浏览器保存。
 // @license           AGPL-3.0-or-later
@@ -19,7 +19,6 @@
 // @match             *://openapi.baidu.com/*
 // @require           https://unpkg.com/jquery@3.7.0/dist/jquery.min.js
 // @require           https://unpkg.com/sweetalert2@10.16.6/dist/sweetalert2.all.min.js
-// @require           https://unpkg.com/js-md5@0.7.3/build/md5.min.js
 // @connect           pan.baidu.com
 // @connect           openapi.baidu.com
 // @connect           baidupcs.com
@@ -45,12 +44,7 @@
         doc = $(document), progress = {}, request = {}, ins = {}, idm = {},
         nativeDownloadBusy = false,
         nativeDownloadRow = null,
-        yunyiduoTimer = null,
         pageListenersReady = false, tipReady = false, menuCommandReady = false;
-    const scriptInfo = GM_info.script;
-    const version = scriptInfo.version;
-    const author = scriptInfo.author;
-    const name = scriptInfo.name;
     const manageHandler = GM_info.scriptHandler;
     const manageVersion = GM_info.version;
     const customClass = {
@@ -66,7 +60,6 @@
     const terminalType = {
         wc: "Windows CMD",
         wp: "Windows PowerShell",
-        lt: "Linux 终端",
         ls: "Linux Shell",
         mt: "MacOS 终端",
     };
@@ -86,6 +79,7 @@
             3: 'https://openapi.baidu.com/oauth/2.0/authorize',
             4: 'https://openapi.baidu.com/oauth/2.0/login_success'
         },
+        appId: 250528,
         btn: {
             home: '.tcuLAu',
             main: '.wp-s-agile-tool-bar__header',
@@ -113,8 +107,6 @@
         ],
         assistant: '请先登录网盘后再生成链接',
         tampermonkeyTip: '请安装更强大的 Tampermonkey BETA (红色图标) 替换 Tampermonkey (黑色图标)，然后重新安装本助手！',
-        num: '865746',
-        license: 'AGPL3',
         ua: 'pan.baidu.com',
         footer: '<div style=\"text-align: center;\">RPC配置说明已内置在本地配置中，修改后自动生效</div>'
     });
@@ -234,11 +226,19 @@
         },
 
         e(str) {
-            return btoa(unescape(encodeURIComponent(str)));
+            const bytes = new TextEncoder().encode(String(str ?? ''));
+            let binary = '';
+            const chunkSize = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunkSize) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
+            }
+            return btoa(binary);
         },
 
         d(str) {
-            return decodeURIComponent(escape(atob(str)));
+            const binary = atob(String(str ?? ''));
+            const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
+            return new TextDecoder().decode(bytes);
         },
 
         getExtension(name) {
@@ -287,7 +287,7 @@
             }
         },
 
-        post(url, data, headers, type) {
+        post(url, data, headers, type, timeout = 30000) {
             if (this.isType(data) === 'object') {
                 data = JSON.stringify(data);
             }
@@ -295,6 +295,10 @@
                 GM_xmlhttpRequest({
                     method: "POST", url, headers, data,
                     responseType: type || 'json',
+                    timeout,
+                    ontimeout: () => {
+                        reject(new Error('请求超时'));
+                    },
                     onload: (res) => {
                         type === 'blob' ? resolve(res) : resolve(res.response || res.responseText);
                     },
@@ -305,11 +309,15 @@
             });
         },
 
-        get(url, headers, type, extra) {
+        get(url, headers, type, extra, timeout = 30000) {
             return new Promise((resolve, reject) => {
                 let requestObj = GM_xmlhttpRequest({
                     method: "GET", url, headers,
                     responseType: type || 'json',
+                    timeout,
+                    ontimeout: () => {
+                        reject(new Error('请求超时'));
+                    },
                     onload: (res) => {
                         if (res.status === 204) {
                             requestObj.abort();
@@ -446,12 +454,6 @@
             }, {
                 name: 'setting_filter_selectors',
                 value: DEFAULT_FILTER_SELECTORS.join('\n')
-            }, {
-                name: 'setting_init_code',
-                value: ''
-            }, {
-                name: 'license',
-                value: ''
             }];
 
             value.forEach((v) => {
@@ -465,6 +467,9 @@
                 .join('\n');
             if (safeFilterSelectors !== filterSelectors) {
                 base.setValue('setting_filter_selectors', safeFilterSelectors || DEFAULT_FILTER_SELECTORS.join('\n'));
+            }
+            if (base.getValue('setting_terminal_type') === 'lt') {
+                base.setValue('setting_terminal_type', 'ls');
             }
         },
 
@@ -509,38 +514,37 @@
                 },
             }).then(() => {
                 message.success('设置成功！');
-                history.go(0);
             });
 
-            doc.on('click', '.listener-color', async (e) => {
-                base.setValue('setting_theme_color', e.target.dataset.color);
+            doc.off('.pl-setting');
+            doc.on('click.pl-setting', '.listener-color', async (e) => {
+                const newColor = e.target.dataset.color;
+                base.setValue('setting_theme_color', newColor);
+                base.applyThemeColor(newColor);
+                $('.listener-color').removeClass('checked');
+                $(e.currentTarget).addClass('checked');
                 message.success('设置成功！');
-                history.go(0);
             });
-            doc.on('input', '.listener-domain', async (e) => {
-                base.setValue('setting_rpc_domain', e.target.value);
-            });
-            doc.on('input', '.listener-port', async (e) => {
-                base.setValue('setting_rpc_port', e.target.value);
-            });
-            doc.on('input', '.listener-path', async (e) => {
-                base.setValue('setting_rpc_path', e.target.value);
-            });
-            doc.on('input', '.listener-token', async (e) => {
-                base.setValue('setting_rpc_token', e.target.value);
-            });
-            doc.on('input', '.listener-dir', async (e) => {
-                base.setValue('setting_rpc_dir', e.target.value);
-            });
-            doc.on('input', '.listener-appkey', async (e) => {
-                base.setValue('setting_baidu_appkey', e.target.value);
-            });
-            doc.on('change', '.listener-terminal', async (e) => {
+            const debounceSave = {};
+            const saveSetting = (name) => (e) => {
+                clearTimeout(debounceSave[name]);
+                debounceSave[name] = setTimeout(() => base.setValue(name, e.target.value), 400);
+            };
+            doc.on('input.pl-setting', '.listener-domain', saveSetting('setting_rpc_domain'));
+            doc.on('input.pl-setting', '.listener-port', saveSetting('setting_rpc_port'));
+            doc.on('input.pl-setting', '.listener-path', saveSetting('setting_rpc_path'));
+            doc.on('input.pl-setting', '.listener-token', saveSetting('setting_rpc_token'));
+            doc.on('input.pl-setting', '.listener-dir', saveSetting('setting_rpc_dir'));
+            doc.on('input.pl-setting', '.listener-appkey', saveSetting('setting_baidu_appkey'));
+            doc.on('change.pl-setting', '.listener-terminal', async (e) => {
                 base.setValue('setting_terminal_type', e.target.value);
             });
-            doc.on('input', '.listener-filter-selectors', async (e) => {
-                base.setValue('setting_filter_selectors', e.target.value);
-                base.removeFilteredElements();
+            doc.on('input.pl-setting', '.listener-filter-selectors', (e) => {
+                clearTimeout(debounceSave.filterSelectors);
+                debounceSave.filterSelectors = setTimeout(() => {
+                    base.setValue('setting_filter_selectors', e.target.value);
+                    base.removeFilteredElements();
+                }, 400);
             });
         },
 
@@ -576,43 +580,6 @@
 
         createLoading() {
             return $('<div class="pl-loading"><div class="pl-loading-box"><div><div></div><div></div></div></div></div>');
-        },
-
-        createDownloadIframe() {
-            let $div = $('<div style="padding:0;margin:0;display:block"></div>');
-            let $iframe = $('<iframe src="javascript:;" id="downloadIframe" style="display:none"></iframe>');
-            $div.append($iframe);
-            $('body').append($div);
-        },
-
-        getMirrorList(link, mirror, thread = 2) {
-            let host = new URL(link).host;
-            let mirrors = [];
-            for (let i = 0; i < mirror.length; i++) {
-                for (let j = 0; j < thread; j++) {
-                    let item = link.replace(host, mirror[i]) + '&'.repeat(j);
-                    mirrors.push(item);
-                }
-            }
-            return mirrors.join('\n');
-        },
-
-        listenElement(element, callback) {
-            const checkInterval = 500; // 检查元素的间隔时间（毫秒）
-            let wasElementFound = false; // 用于跟踪元素是否之前已经找到
-
-            function checkElement() {
-                if (document.querySelector(element)) {
-                    wasElementFound = true;
-                    callback();
-                } else if (wasElementFound) {
-                    wasElementFound = false; // 元素消失后重置标志
-                }
-
-                setTimeout(checkElement, checkInterval);
-            }
-
-            checkElement();
         },
 
         getFilterSelectors() {
@@ -655,6 +622,11 @@
                 --pl-dur: 0.22s;
                 --pl-font: -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
                 --pl-mono: "SF Mono", "JetBrains Mono", "Cascadia Code", Consolas, Monaco, monospace;
+                --pl-primary: ${color};
+                --pl-primary-a8: ${color}14;
+                --pl-primary-a12: ${color}1f;
+                --pl-primary-a25: ${color}40;
+                --pl-primary-a33: ${color}55;
             }
             body::-webkit-scrollbar { display: none }
             ::-webkit-scrollbar { width: 6px; height: 10px }
@@ -678,7 +650,7 @@
             .pl-setting-dialog .swal2-close { top:8px!important; right:10px!important; }
             .pl-setting-dialog .swal2-footer { margin:0!important; padding:12px 0 2px!important; }
             .pl-popup { font-family: var(--pl-font); font-size: 14px !important; color: var(--pl-text-1); }
-            .pl-popup a { color: ${color} !important; }
+            .pl-popup a { color: var(--pl-primary) !important; }
             .pl-header { padding: 0 0 12px!important; align-items: flex-start!important; border-bottom: 1px solid rgba(0,0,0,0.06)!important; margin: 0 0 16px!important; }
             .pl-title { font-size: 18px!important; line-height: 1.4!important; font-weight: 600!important; letter-spacing: 0.2px; white-space: nowrap!important; text-overflow: ellipsis!important; color: var(--pl-text-1)!important; }
             .pl-content { padding: 0 !important; font-size: 14px!important; }
@@ -693,23 +665,23 @@
             .pl-item:last-child { border-bottom: 0; }
             .pl-item-name { flex: 0 0 180px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor:default; color: var(--pl-text-1); }
             .pl-item-size { flex: 0 0 88px; text-align:left; color: var(--pl-text-2); white-space: nowrap; }
-            .pl-item-link { flex: 1; overflow: hidden; text-align: left; white-space: nowrap; text-overflow: ellipsis; cursor:pointer; color: ${color}; }
-            .pl-item-btn { background: ${color}; padding: 4px 10px; border-radius: var(--pl-radius-tag); line-height: 1; cursor: pointer; color: #fff; border: 0; }
+            .pl-item-link { flex: 1; overflow: hidden; text-align: left; white-space: nowrap; text-overflow: ellipsis; cursor:pointer; color: var(--pl-primary); }
+            .pl-item-btn { background: var(--pl-primary); padding: 4px 10px; border-radius: var(--pl-radius-tag); line-height: 1; cursor: pointer; color: #fff; border: 0; }
             .pl-item-tip { display: flex; justify-content: space-between; gap: 10px; flex: 1; color: var(--pl-text-2); }
             .pl-back { width: 70px; background: rgba(255,255,255,0.6); color: var(--pl-text-1); border-radius: var(--pl-radius-tag); cursor:pointer; margin:1px 0; text-align: center; border: 1px solid rgba(255,255,255,0.5); }
             .pl-ext { display: inline-block; width: 44px; background: rgba(0,0,0,0.06); color: var(--pl-text-1); height: 16px; line-height: 16px; font-size: 12px; border-radius: 4px; }
             .pl-retry {padding: 3px 10px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
-            .pl-browserdownload { padding: 3px 10px; background: ${color}; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
+            .pl-browserdownload { padding: 3px 10px; background: var(--pl-primary); color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
             .pl-item-progress { display:flex; flex: 1; align-items:center; gap: 10px; }
             .pl-progress { display: inline-block;vertical-align: middle;width: 100%; box-sizing: border-box;line-height: 1;position: relative;height: 16px; flex: 1; }
             .pl-progress-outer { height: 16px;border-radius: 999px;background-color: rgba(0,0,0,0.06);overflow: hidden;position: relative;vertical-align: middle;border: 1px solid rgba(255,255,255,0.4); }
-            .pl-progress-inner{ position: absolute;left: 0;top: 0;background-color: ${color};text-align: right;border-radius: 999px;line-height: 1;white-space: nowrap;transition: width .3s ease; box-shadow: inset 0 1px 0 rgba(255,255,255,0.4); }
+            .pl-progress-inner{ position: absolute;left: 0;top: 0;background-color: var(--pl-primary);text-align: right;border-radius: 999px;line-height: 1;white-space: nowrap;transition: width .3s ease; box-shadow: inset 0 1px 0 rgba(255,255,255,0.4); }
             .pl-progress-inner-text { display: inline-block;vertical-align: middle;color: var(--pl-text-2);font-size: 12px;margin: 0 6px;height: 16px}
             .pl-progress-tip{ flex:1;text-align:right; color: var(--pl-text-2); }
             .pl-progress-how{ flex: 0 0 88px; background: rgba(255,255,255,0.6); border-radius: var(--pl-radius-tag); margin-left: 0; cursor: pointer; text-align: center; color: var(--pl-text-1); border: 1px solid rgba(255,255,255,0.5); }
             .pl-progress-stop{ flex: 0 0 60px; padding: 0 12px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;margin-left:0;height:24px; line-height: 24px; text-align:center; border: 0; }
             .pl-progress-inner-text:after { display: inline-block;content: "";height: 100%;vertical-align: middle;}
-            .pl-btn-primary { background: ${color}; border: 0; border-radius: var(--pl-radius-ctrl); color: #ffffff; cursor: pointer; font-family: var(--pl-font); font-size: 13px; outline: none; display:flex; align-items: center; justify-content: center; margin: 2px 0; padding: 8px 12px; transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), opacity var(--pl-dur) var(--pl-ease); box-shadow: 0 2px 8px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25); }
+            .pl-btn-primary { background: var(--pl-primary); border: 0; border-radius: var(--pl-radius-ctrl); color: #ffffff; cursor: pointer; font-family: var(--pl-font); font-size: 13px; outline: none; display:flex; align-items: center; justify-content: center; margin: 2px 0; padding: 8px 12px; transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), opacity var(--pl-dur) var(--pl-ease); box-shadow: 0 2px 8px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25); }
             .pl-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25); }
             .pl-btn-success { background: #52c41a; }
             .pl-btn-info { background: #1677ff; }
@@ -738,7 +710,7 @@
             .pl-setting-wide { width:100%; box-sizing:border-box; }
             .pl-setting-row { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.15fr); gap:14px; align-items:stretch; }
             .pl-setting-group { padding: 14px 16px 16px; margin-bottom: 14px; border: 1px solid var(--pl-glass-border); border-radius: var(--pl-radius-card); background: var(--pl-glass-bg); backdrop-filter: blur(12px) saturate(150%); -webkit-backdrop-filter: blur(12px) saturate(150%); box-sizing:border-box; min-width:0; box-shadow: var(--pl-shadow-sm), inset 0 1px 0 rgba(255,255,255,0.5); position: relative; overflow: hidden; }
-            .pl-setting-group::before { content:""; position:absolute; inset:0; background: radial-gradient(120% 80% at 0% 0%, ${color}14, transparent 60%); pointer-events:none; }
+            .pl-setting-group::before { content:""; position:absolute; inset:0; background: radial-gradient(120% 80% at 0% 0%, var(--pl-primary-a8), transparent 60%); pointer-events:none; }
             .pl-setting-group-title { font-size: 15px; font-weight: 600; color: var(--pl-text-1); line-height: 1.4; position: relative; }
             .pl-setting-group-desc { margin-top: 4px; color: var(--pl-text-2); font-size: 12px; line-height: 1.5; position: relative; }
             .pl-setting-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; margin-top:12px; position: relative; }
@@ -746,13 +718,13 @@
             .pl-setting-fields .pl-setting-field { padding-top:0; }
             .pl-setting-field > span { font-size:13px; line-height:20px; }
             .pl-input { width:100%; box-sizing:border-box; padding: 8px 12px; border: 1px solid rgba(0,0,0,0.1); border-radius: var(--pl-radius-ctrl); font-family: var(--pl-font); font-size: 14px; outline: none; transition: border-color var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), background-color var(--pl-dur) var(--pl-ease); background: rgba(255,255,255,0.6); color: var(--pl-text-1); }
-            .pl-input:focus { border-color: ${color}; box-shadow: 0 0 0 2px ${color}1f; background: rgba(255,255,255,0.85); }
+            .pl-input:focus { border-color: var(--pl-primary); box-shadow: 0 0 0 2px var(--pl-primary-a12); background: rgba(255,255,255,0.85); }
             .pl-setting-field textarea.pl-input { min-height:130px; resize:vertical; font-family:var(--pl-mono); line-height:1.55; }
             .pl-setting-help { margin-top:8px; color:var(--pl-text-2); font-size:12px; line-height:1.6; text-align:left; }
             .pl-color { display:flex; flex-wrap:wrap; gap:10px; padding-top:2px; }
             .pl-color-box { width:28px; height:28px; box-sizing:border-box; border:1px solid rgba(255,255,255,0.8); cursor:pointer; border-radius:50%; box-shadow:0 0 0 1px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.4); transition: box-shadow var(--pl-dur) var(--pl-ease), transform var(--pl-dur) var(--pl-ease); }
             .pl-color-box:hover { transform: scale(1.1); }
-            .pl-color-box.checked { border:2px solid #fff!important; box-shadow: 0 0 0 2px ${color}, 0 2px 8px ${color}40; }
+            .pl-color-box.checked { border:2px solid #fff!important; box-shadow: 0 0 0 2px var(--pl-primary), 0 2px 8px var(--pl-primary-a25); }
             @media (max-width:760px) {
                 .pl-setting-row { grid-template-columns:1fr; }
                 .pl-setting-fields { grid-template-columns:1fr; }
@@ -771,12 +743,21 @@
             .pl-rename-preview-table td,
             .pl-rename-preview-table td * { user-select:text!important; -webkit-user-select:text!important; }
             .btn-operate .btn-main { display:flex; align-items:center; }
-            .pl-iina-button { position: fixed; top: 76px; right: 24px; z-index: 99999; display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 15px; border: 1px solid var(--pl-glass-border); border-radius: var(--pl-radius-ctrl); background: var(--pl-glass-bg); backdrop-filter: var(--pl-glass-blur); -webkit-backdrop-filter: var(--pl-glass-blur); color: ${color}; font-family: var(--pl-font); font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 16px ${color}40, 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.5); transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease); }
-            .pl-iina-button:hover { transform: translateY(-1px); box-shadow: 0 6px 20px ${color}55, 0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.5); }
+            .pl-iina-button { position: fixed; top: 76px; right: 24px; z-index: 99999; display: inline-flex; align-items: center; gap: 7px; height: 36px; padding: 0 15px; border: 1px solid var(--pl-glass-border); border-radius: var(--pl-radius-ctrl); background: var(--pl-glass-bg); backdrop-filter: var(--pl-glass-blur); -webkit-backdrop-filter: var(--pl-glass-blur); color: var(--pl-primary); font-family: var(--pl-font); font-size: 14px; font-weight: 600; cursor: pointer; box-shadow: 0 4px 16px var(--pl-primary-a25), 0 2px 8px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.5); transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease); }
+            .pl-iina-button:hover { transform: translateY(-1px); box-shadow: 0 6px 20px var(--pl-primary-a33), 0 4px 12px rgba(0,0,0,0.1), inset 0 1px 0 rgba(255,255,255,0.5); }
             .pl-iina-button:disabled { cursor: wait; opacity: .65; }
             .pl-iina-button-icon { font-size: 12px; line-height: 1; }
             `;
             this.addStyle('panlinker-style', 'style', css);
+        },
+
+        applyThemeColor(colorValue) {
+            const root = document.documentElement;
+            root.style.setProperty('--pl-primary', colorValue);
+            root.style.setProperty('--pl-primary-a8', colorValue + '14');
+            root.style.setProperty('--pl-primary-a12', colorValue + '1f');
+            root.style.setProperty('--pl-primary-a25', colorValue + '40');
+            root.style.setProperty('--pl-primary-a33', colorValue + '55');
         },
 
     };
@@ -980,7 +961,7 @@
                 o.link.hide();
                 o.tip.hide();
                 o.progress.show();
-                base.get(o.link[0].dataset.link, headers, 'blob', {filename, index}).then((res) => {
+                base.get(o.link[0].dataset.link, headers, 'blob', {filename, index}, 0).then((res) => {
                     if (res.status !== 200) {
                         o.progress.hide();
                         o.tip.find('.pl-tip-text').html(`下载失败（状态码：${res.status || '未知'}），请重试或改用 Aria。`);
@@ -1129,19 +1110,20 @@
                     e.stopPropagation();
                 }
             }, true);
+            const handledNativeEvents = new WeakSet();
             const handleNativeDownload = async (e) => {
+                if (e.type !== 'click') return;
                 if (nativeDownloadBusy) return;
-                if (e.__plNativeDownloadHandled) return;
-                e.__plNativeDownloadHandled = true;
+                if (handledNativeEvents.has(e)) return;
                 const row = e.target.closest && e.target.closest('tr.wp-s-pan-table__body-row, tr[data-id]');
                 if (!row) return;
                 const downloadBtn = e.target.closest && e.target.closest('button[title="下载"], .wp-s-agile-tool-bar__h-action-button');
                 const icon = downloadBtn && (downloadBtn.matches && downloadBtn.matches('i.u-icon-download') ? downloadBtn : downloadBtn.querySelector && downloadBtn.querySelector('i.u-icon-download'));
                 if (!icon || !row.contains(icon) || icon.closest('.pl-button')) return;
+                handledNativeEvents.add(e);
                 e.preventDefault();
                 e.stopPropagation();
                 e.stopImmediatePropagation();
-                if (e.type !== 'click') return;
                 const fileItem = this.getFileItemFromRowDom(icon);
                 if (!fileItem) {
                     message.error('提示：已拦截网盘下载，但未能识别该文件信息，请刷新后重试！');
@@ -1170,11 +1152,11 @@
             if (!pt) return;
             this.addPageListener();
             let $toolWrap;
-            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: ${color};border-color:${color}" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:${color}"><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:${color}" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.new : ''}</div></div>`);
+            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: var(--pl-primary);border-color:var(--pl-primary)" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:var(--pl-primary)"><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li></div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
             if (pt === 'main') {
                 $toolWrap = $(LOCAL_PAN_CONFIG.btn.main);
-                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: ${color};border-color: ${color};font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li>${LOCAL_PAN_CONFIG.code == 200 && version < LOCAL_PAN_CONFIG.version ? LOCAL_PAN_CONFIG.newX : ''}</ul></div>`);
+                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: var(--pl-primary);border-color: var(--pl-primary);font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li></ul></div>`);
                 $button.find('.listener-batch-rename').before('<li class="sub cursor-p listener-iina-play">用 IINA 播放</li>');
             }
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
@@ -1249,13 +1231,18 @@
             if (windowToken) return windowToken;
 
             // 新版网盘将登录上下文写入页面脚本，油猴隔离环境无法直接读取页面 window.locals。
+            let fallback = '';
             for (const script of document.scripts) {
                 const text = script.textContent || '';
                 if (!text.includes('bdstoken')) continue;
                 const match = text.match(/["']bdstoken["']\s*:\s*["']([^"']+)["']/);
-                if (match?.[1]) return match[1];
+                if (!match?.[1]) continue;
+                if (/bdstoken\.value|userInfo|shareid|"uk"\s*:/.test(text)) {
+                    return match[1];
+                }
+                fallback = fallback || match[1];
             }
-            return '';
+            return fallback;
         },
 
         async showBatchRenameDialog() {
@@ -1503,7 +1490,7 @@
                 didOpen: () => Swal.showLoading()
             });
 
-            const url = `https://pan.baidu.com/api/filemanager?opera=rename&async=2&onnest=fail&channel=chunlei&web=1&app_id=250528&clienttype=0&bdstoken=${encodeURIComponent(bdstoken)}`;
+            const url = `https://pan.baidu.com/api/filemanager?opera=rename&async=2&onnest=fail&channel=chunlei&web=1&app_id=${LOCAL_PAN_CONFIG.appId}&clienttype=0&bdstoken=${encodeURIComponent(bdstoken)}`;
             let rawResponse = '';
             try {
                 let res = await base.post(url, base.stringify({filelist: JSON.stringify(renameList)}), {
@@ -1617,7 +1604,7 @@
                 if (selectList.length === 0) {
                     return message.error('提示：请先勾选要下载的文件！');
                 }
-                if (fidList.length === 2) {
+                if (fidList === '[]') {
                     return message.error('提示：请打开文件夹后勾选文件！');
                 }
                 fidList = encodeURIComponent(fidList);
@@ -1633,7 +1620,7 @@
                 if (selectList.length === 0) {
                     return message.error('提示：请先勾选要下载的文件！');
                 }
-                if (fidList.length === 2) {
+                if (fidList === '[]') {
                     return message.error('提示：请打开文件夹后勾选文件！');
                 }
                 let dialog = await Swal.fire({
@@ -1991,8 +1978,12 @@
         },
 
         getLogid() {
-            let ut = require("system-core:context/context.js").instanceForSystem.tools.baseService;
-            return ut.base64Encode(base.getCookie("BAIDUID"));
+            try {
+                let ut = require("system-core:context/context.js").instanceForSystem.tools.baseService;
+                return ut.base64Encode(base.getCookie("BAIDUID"));
+            } catch (e) {
+                return '';
+            }
         },
 
         getShareData() {
@@ -2004,7 +1995,7 @@
             params.channel = 'chunlei';
             params.clienttype = 0;
             params.web = 1;
-            params.app_id = 250528;
+            params.app_id = LOCAL_PAN_CONFIG.appId;
             params.encrypt = 0;
             params.product = 'share';
             params.logid = this.getLogid();
@@ -2020,7 +2011,6 @@
             if (/^\/disk\/main/.test(path)) return 'main';
             if (/^\/pfile\/video/.test(path)) return 'video';
             if (/^\/(s|share)\//.test(path)) return 'share';
-            return '';
             return '';
         },
 
@@ -2062,8 +2052,6 @@
             base.addPanLinkerStyle();
             pt = this.detectPage();
             pan = LOCAL_PAN_CONFIG;
-            base.setValue('setting_init_code', LOCAL_PAN_CONFIG.num);
-            base.setValue('license', LOCAL_PAN_CONFIG.license);
             if (pt === 'video') {
                 this.addIINAButton();
                 base.registerMenuCommand();
@@ -2071,11 +2059,13 @@
             }
             base.removeFilteredElements();
             if (!window.__plYunyiduoObserver) {
-                window.__plYunyiduoObserver = new MutationObserver(() => base.removeFilteredElements());
+                let filterTimer = null;
+                const applyFilters = () => {
+                    clearTimeout(filterTimer);
+                    filterTimer = setTimeout(() => base.removeFilteredElements(), 200);
+                };
+                window.__plYunyiduoObserver = new MutationObserver(applyFilters);
                 window.__plYunyiduoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
-            }
-            if (!yunyiduoTimer) {
-                yunyiduoTimer = setInterval(() => base.removeFilteredElements(), 1000);
             }
             // 页面过滤规则可在助手设置中修改，默认保留现有广告与云一朵规则。
             this.addButton();
