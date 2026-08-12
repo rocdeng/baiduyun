@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              百度网盘助手
 // @namespace         https://github.com/syhyz1990/baiduyun
-// @version           1.0.24
+// @version           1.0.28
 // @author            Roc Deng
 // @description       支持批量获取百度网盘直链下载地址，脚本拉取文件后由浏览器保存。
 // @license           AGPL-3.0-or-later
@@ -57,12 +57,6 @@
         footer: 'pl-footer'
     };
 
-    const terminalType = {
-        wc: "Windows CMD",
-        wp: "Windows PowerShell",
-        ls: "Linux Shell",
-        mt: "MacOS 终端",
-    };
     const DEFAULT_FILTER_SELECTORS = [
         '.nd-operate-guidance',
         '.wp-custom-input-wrap',
@@ -96,14 +90,6 @@
         rpc: [
             'RPC下载（适用于 Motrix、Aria2 Tools、AriaNgGUI）',
             '点击按钮发送链接至本地或远程 RPC 服务，例如 Motrix，RPC 参数按本地配置填写，建议配合超级会员使用。'
-        ],
-        curl: [
-            'cURL下载（适用于 Windows、Linux、MacOS 终端）',
-            '点击链接复制地址到剪切板，粘贴到 Windows、Linux、MacOS 终端，支持断点续传，建议配合超级会员使用。'
-        ],
-        bc: [
-            'BC下载（适用于比特彗星）',
-            '点击链接复制地址到剪切板，粘贴到比特彗星下载器中，建议配合超级会员使用。'
         ],
         assistant: '请先登录网盘后再生成链接',
         tampermonkeyTip: '请安装更强大的 Tampermonkey BETA (红色图标) 替换 Tampermonkey (黑色图标)，然后重新安装本助手！',
@@ -223,22 +209,6 @@
 
         escapeAttr(value) {
             return this.escapeHtml(value).replace(/`/g, '&#96;');
-        },
-
-        e(str) {
-            const bytes = new TextEncoder().encode(String(str ?? ''));
-            let binary = '';
-            const chunkSize = 0x8000;
-            for (let i = 0; i < bytes.length; i += chunkSize) {
-                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunkSize));
-            }
-            return btoa(binary);
-        },
-
-        d(str) {
-            const binary = atob(String(str ?? ''));
-            const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-            return new TextDecoder().decode(bytes);
         },
 
         getExtension(name) {
@@ -446,9 +416,6 @@
                 name: 'setting_baidu_appkey',
                 value: 'IlLqBbU3GjQ0t46TRwFateTprHWl39zF'
             }, {
-                name: 'setting_terminal_type',
-                value: 'wc'
-            }, {
                 name: 'setting_theme_color',
                 value: '#09AAFF'
             }, {
@@ -468,9 +435,6 @@
             if (safeFilterSelectors !== filterSelectors) {
                 base.setValue('setting_filter_selectors', safeFilterSelectors || DEFAULT_FILTER_SELECTORS.join('\n'));
             }
-            if (base.getValue('setting_terminal_type') === 'lt') {
-                base.setValue('setting_terminal_type', 'ls');
-            }
         },
 
         showSetting() {
@@ -487,12 +451,7 @@
             colorList.forEach((v) => {
                 btn += `<div data-color="${v}" style="background: ${v};border: 1px solid ${v}" class="pl-color-box listener-color ${v === base.getValue('setting_theme_color') ? 'checked' : ''}"></div>`;
             });
-            dom += `<div class="pl-setting-row"><div class="pl-setting-group"><div class="pl-setting-group-title">外观</div><div class="pl-setting-group-desc">调整脚本界面与命令生成方式。</div>`;
-            dom += `<label class="pl-setting-field"><span>终端类型</span><select class="pl-input listener-terminal">`;
-            Object.keys(terminalType).forEach(k => {
-                dom += `<option value="${k}" ${base.getValue('setting_terminal_type') === k ? 'selected' : ''}>${terminalType[k]}</option>`;
-            });
-            dom += `</select></label>`;
+            dom += `<div class="pl-setting-row"><div class="pl-setting-group"><div class="pl-setting-group-title">外观</div><div class="pl-setting-group-desc">调整脚本界面样式。</div>`;
             dom += `<div class="pl-setting-field"><span>主题颜色</span><div class="pl-color">${btn}</div></div>`;
             dom += `</div>`;
             dom += `<div class="pl-setting-group"><div class="pl-setting-group-title">页面过滤</div><div class="pl-setting-group-desc">每行填写一个 CSS 选择器，可添加多个需要自动隐藏并删除的 DIV 或其他页面元素。</div>`;
@@ -536,9 +495,6 @@
             doc.on('input.pl-setting', '.listener-token', saveSetting('setting_rpc_token'));
             doc.on('input.pl-setting', '.listener-dir', saveSetting('setting_rpc_dir'));
             doc.on('input.pl-setting', '.listener-appkey', saveSetting('setting_baidu_appkey'));
-            doc.on('change.pl-setting', '.listener-terminal', async (e) => {
-                base.setValue('setting_terminal_type', e.target.value);
-            });
             doc.on('input.pl-setting', '.listener-filter-selectors', (e) => {
                 clearTimeout(debounceSave.filterSelectors);
                 debounceSave.filterSelectors = setTimeout(() => {
@@ -760,6 +716,11 @@
             root.style.setProperty('--pl-primary-a33', colorValue + '55');
         },
 
+        getAriaPlatform() {
+            const platform = navigator.userAgentData?.platform || navigator.platform || navigator.userAgent || '';
+            return /windows|win32|win64/i.test(platform) ? 'windows' : 'mac';
+        },
+
     };
 
     let baidu = {
@@ -837,12 +798,16 @@
             return baiduyunPlugin_BDUSS.BDUSS || '';
         },
 
-        convertLinkToAria(link, filename, ua) {
+        convertLinkToAria(link, filename, ua, platform = 'mac') {
             let BDUSS = this.getBDUSS();
             if (!!BDUSS) {
                 filename = base.fixFilename(filename);
                 // Aria2 稳定参数：断点续传、8 线程、10MB 分片，兼顾速度和服务器压力。
-                return `aria2c "${link}" -c -s 8 -x 8 -k 1M --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
+                if (platform === 'windows') {
+                    const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
+                    return `aria2c.exe ${quote(link)} -c -s 8 -x 8 -k 10M --dir ${quote('D:\\')} --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
+                }
+                return `aria2c "${link}" -c -s 8 -x 8 -k 10M --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
             }
             return {
                 link: LOCAL_PAN_CONFIG.assistant,
@@ -850,29 +815,13 @@
             };
         },
 
-        convertLinkToBC(link, filename, ua) {
-            let BDUSS = this.getBDUSS();
-            if (!!BDUSS) {
-                let cookie = `BDUSS=${BDUSS}`;
-                let bc = `AA/${encodeURIComponent(filename)}/?url=${encodeURIComponent(link)}&cookie=${encodeURIComponent(cookie)}&user_agent=${encodeURIComponent(ua)}ZZ`;
-                return encodeURIComponent(`bc://http/${base.e(bc)}`);
-            }
+        copyAriaCommands(commands) {
+            const platform = base.getAriaPlatform();
+            const command = commands?.[platform] || '';
+            if (!command.trim()) return false;
             return {
-                link: LOCAL_PAN_CONFIG.assistant,
-                text: LOCAL_PAN_CONFIG.tampermonkeyTip
-            };
-        },
-
-        convertLinkToCurl(link, filename, ua) {
-            let BDUSS = this.getBDUSS();
-            if (!!BDUSS) {
-                let terminal = base.getValue('setting_terminal_type');
-                filename = base.fixFilename(filename);
-                return encodeURIComponent(`${terminal !== 'wp' ? 'curl' : 'curl.exe'} -L -C - "${link}" -o "${filename}" -A "${ua}" -b "BDUSS=${BDUSS}"`);
-            }
-            return {
-                link: LOCAL_PAN_CONFIG.assistant,
-                text: LOCAL_PAN_CONFIG.tampermonkeyTip
+                copied: base.setClipboard(command),
+                platform
             };
         },
 
@@ -1024,14 +973,15 @@
             doc.on('click', '.listener-link-aria, .listener-copy-all', (e) => {
                 e.preventDefault();
                 let target = e.currentTarget;
-                if (!target.dataset.link) {
-                    $(target).removeClass('listener-copy-all').addClass('pl-btn-danger').html(`${LOCAL_PAN_CONFIG.tampermonkeyTip}👉<a href="${LOCAL_PAN_CONFIG.assistant}" target="_blank" class="pl-a">点击此处安装</a>👈`);
+                const result = this.copyAriaCommands({
+                    mac: decodeURIComponent(target.dataset.linkMac || ''),
+                    windows: decodeURIComponent(target.dataset.linkWindows || '')
+                });
+                if (result?.copied) {
+                    const platformName = result.platform === 'windows' ? 'Windows' : 'Mac';
+                    $(target).text(`${platformName} 命令复制成功，快去粘贴吧！`).animate({opacity: '0.5'}, "slow");
                 } else {
-                    if (base.setClipboard(decodeURIComponent(target.dataset.link))) {
-                        $(target).text('复制成功，快去粘贴吧！').animate({opacity: '0.5'}, "slow");
-                    } else {
-                        message.error('复制失败，请检查浏览器剪贴板权限！');
-                    }
+                    message.error('复制失败，请检查浏览器剪贴板权限！');
                 }
             });
             doc.on('click', '.listener-link-rpc', async (e) => {
@@ -1152,11 +1102,11 @@
             if (!pt) return;
             this.addPageListener();
             let $toolWrap;
-            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: var(--pl-primary);border-color:var(--pl-primary)" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:var(--pl-primary)"><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="curl">cURL下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="bc">BC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li></div></div>`);
+            let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: var(--pl-primary);border-color:var(--pl-primary)" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:var(--pl-primary)"><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li></div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
             if (pt === 'main') {
                 $toolWrap = $(LOCAL_PAN_CONFIG.btn.main);
-                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: var(--pl-primary);border-color: var(--pl-primary);font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p pl-button-mode" data-mode="curl">cURL下载</li><li class="sub cursor-p pl-button-mode" data-mode="bc" >BC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li></ul></div>`);
+                $button = $(`<div class="pl-button" style="position: relative; display: inline-block; margin-right: 8px;"><button class="u-button u-button--primary u-button--small is-round is-has-icon" style="background: var(--pl-primary);border-color: var(--pl-primary);font-size: 14px; padding: 8px 16px; border: none;"><i class="u-icon u-icon-download"></i><span>下载助手</span></button><ul class="dropdown-list nd-common-float-menu pl-dropdown-menu"><li class="sub cursor-p pl-button-mode" data-mode="aria">Aria下载</li><li class="sub cursor-p pl-button-mode" data-mode="rpc">RPC下载</li><li class="sub cursor-p listener-batch-rename">批量更名</li><li class="sub cursor-p listener-open-setting">助手设置</li></ul></div>`);
                 $button.find('.listener-batch-rename').before('<li class="sub cursor-p listener-iina-play">用 IINA 播放</li>');
             }
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
@@ -1722,7 +1672,7 @@
 
         generateDom(list, downloadMode = mode) {
             let content = '<div class="pl-main"><div class="pl-table-head"><div class="pl-th-name">文件名</div><div class="pl-th-size">大小</div><div class="pl-th-action">操作</div></div>';
-            let alinkAllText = '';
+            let ariaAllCommands = {mac: '', windows: ''};
             base.sortByName(list);
             list.forEach((v, i) => {
                 if (v.isdir === 1) return;
@@ -1755,20 +1705,23 @@
                                 </div></div>`;
                 }
                 if (downloadMode === 'aria') {
-                    let alink = this.convertLinkToAria(dlink, filename, LOCAL_PAN_CONFIG.ua);
+                    let alink = this.convertLinkToAria(dlink, filename, LOCAL_PAN_CONFIG.ua, 'mac');
                     if (typeof (alink) === 'object') {
                         content += `<div class="pl-item">
                                 <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
                                 <div class="pl-item-size">${safeSize}</div>
                                 <a class="pl-item-link pl-a" target="_blank" href="${base.escapeAttr(alink.link)}" data-filename="${filenameAttr}" data-link="${base.escapeAttr(alink.link)}">${base.escapeHtml(decodeURIComponent(alink.text))}</a> </div>`;
                     } else {
-                        alinkAllText += alink + '\r\n';
+                        const windowsCommand = this.convertLinkToAria(dlink, filename, LOCAL_PAN_CONFIG.ua, 'windows');
+                        ariaAllCommands.mac += alink + '\n';
+                        ariaAllCommands.windows += windowsCommand + '\r\n';
                         let alinkText = base.escapeHtml(decodeURIComponent(alink));
-                        let alinkAttr = base.escapeAttr(encodeURIComponent(alink));
+                        let macCommandAttr = base.escapeAttr(encodeURIComponent(alink));
+                        let windowsCommandAttr = base.escapeAttr(encodeURIComponent(windowsCommand));
                         content += `<div class="pl-item">
                                 <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
                                 <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a listener-link-aria" href="${alinkAttr}" title="点击复制aria2c链接" data-filename="${filenameAttr}" data-link="${alinkAttr}">${alinkText}</a> </div>`;
+                                <a class="pl-item-link pl-a listener-link-aria" href="#" title="点击复制aria2c命令" data-command-kind="aria" data-filename="${filenameAttr}" data-link-mac="${macCommandAttr}" data-link-windows="${windowsCommandAttr}">${alinkText}</a> </div>`;
                     }
                 }
                 if (downloadMode === 'rpc') {
@@ -1777,53 +1730,17 @@
                                 <div class="pl-item-size">${safeSize}</div>
                                 <button class="pl-item-link listener-link-rpc pl-btn-primary pl-btn-info" data-filename="${filenameAttr}" data-link="${dlinkAttr}"><em class="icon icon-device"></em><span style="margin-left: 5px;">推送到 RPC 下载器</span></button></div>`;
                 }
-                if (downloadMode === 'curl') {
-                    let alink = this.convertLinkToCurl(dlink, filename, LOCAL_PAN_CONFIG.ua);
-                    if (typeof (alink) === 'object') {
-                        content += `<div class="pl-item">
-                                <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
-                                <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a" target="_blank" href="${base.escapeAttr(alink.link)}" data-filename="${filenameAttr}" data-link="${base.escapeAttr(alink.link)}">${base.escapeHtml(decodeURIComponent(alink.text))}</a> </div>`;
-                    } else {
-                        alinkAllText += alink + '\r\n';
-                        let alinkText = base.escapeHtml(decodeURIComponent(alink));
-                        let alinkAttr = base.escapeAttr(encodeURIComponent(alink));
-                        content += `<div class="pl-item">
-                                <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
-                                <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a listener-link-aria" href="${alinkAttr}" title="点击复制curl链接" data-filename="${filenameAttr}" data-link="${alinkAttr}">${alinkText}</a> </div>`;
-                    }
-                }
-                if (downloadMode === 'bc') {
-                    let alink = this.convertLinkToBC(dlink, filename, LOCAL_PAN_CONFIG.ua);
-                    if (typeof (alink) === 'object') {
-                        content += `<div class="pl-item">
-                                <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
-                                <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a" target="_blank" href="${base.escapeAttr(alink.link)}" data-filename="${filenameAttr}" data-link="${base.escapeAttr(alink.link)}">${base.escapeHtml(decodeURIComponent(alink.text))}</a> </div>`;
-                    } else {
-                        let alinkHref = base.escapeAttr(decodeURIComponent(alink));
-                        let alinkText = base.escapeHtml(decodeURIComponent(alink));
-                        content += `<div class="pl-item">
-                                <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
-                                <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a" href="${alinkHref}" title="点击用比特彗星下载" data-filename="${filenameAttr}" data-link="${base.escapeAttr(alink)}">${alinkText}</a> </div>`;
-                    }
-
-                }
             });
             content += '</div>';
             if (downloadMode === 'aria')
-                content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-link="${base.escapeAttr(encodeURIComponent(alinkAllText))}">复制全部链接</button></div>`;
+                content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-command-kind="aria" data-link-mac="${base.escapeAttr(encodeURIComponent(ariaAllCommands.mac))}" data-link-windows="${base.escapeAttr(encodeURIComponent(ariaAllCommands.windows))}">复制全部链接</button></div>`;
             if (downloadMode === 'rpc') {
                 let rpc = base.getValue('setting_rpc_domain') + ':' + base.getValue('setting_rpc_port') + base.getValue('setting_rpc_path');
                 content += `<div class="pl-extra"><button class="pl-btn-primary listener-send-rpc">发送全部链接</button><button title="${rpc}" class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px">设置 RPC 参数（当前为：${rpc}）</button><button class="pl-btn-primary pl-btn-success listener-rpc-task" style="margin-left: 10px;display: none">查看下载任务</button></div>`;
             }
-            if (downloadMode === 'curl')
-                content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-link="${base.escapeAttr(encodeURIComponent(alinkAllText))}">复制全部链接</button><button class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px;">设置终端类型（当前为：${terminalType[base.getValue('setting_terminal_type')]}）</button></div>`;
             return {
                 html: content,
-                clipboardText: downloadMode === 'aria' || downloadMode === 'curl' ? alinkAllText : ''
+                clipboardText: downloadMode === 'aria' ? ariaAllCommands : ''
             };
         },
 
@@ -2030,14 +1947,17 @@
                 this._resetData();
             });
             if (downloadMode === 'aria') {
-                if (!clipboardText.trim()) {
+                if (!clipboardText?.mac?.trim() || !clipboardText?.windows?.trim()) {
                     message.error('未读取到百度登录 Cookie，无法生成 aria2c 命令，请刷新百度网盘后重试！');
                     return;
                 }
-                const copied = base.setClipboard(clipboardText);
-                copied
-                    ? message.success('aria2c 链接已自动复制到剪切板！')
-                    : message.error('自动复制失败，请点击“复制全部链接”重试！');
+                const result = this.copyAriaCommands(clipboardText);
+                if (result?.copied) {
+                    const platformName = result.platform === 'windows' ? 'Windows' : 'Mac';
+                    message.success(`${platformName} aria2c 命令已复制到剪切板！`);
+                } else {
+                    message.error('自动复制失败，请点击“复制全部链接”重试！');
+                }
                 if (nativeDownloadRow) {
                     setTimeout(() => {
                         this.tryUnselectRowFromDom(nativeDownloadRow);

@@ -1,6 +1,6 @@
 # 百度网盘助手 优化清单
 
-> 分析对象：`panlinker.user.js`（v1.0.24，2109 行，单文件油猴脚本）
+> 分析对象：`panlinker.user.js`（v1.0.28，2029 行，单文件油猴脚本）
 > 生成时间：2026-08-01
 > 修复时间：2026-08-01
 
@@ -11,14 +11,14 @@
 | P0 缺陷/风险 | ✅ 5/6 已修 | BDUSS 条目为必需鉴权，保留原行为 |
 | P1 性能/体验 | ✅ 4/5 已修 | P1-5（批量更名后刷新）保留 |
 | P2 死代码清理 | ✅ 6/6 已修 | |
-| P3 架构 | 🔶 部分 | e/d、appId 已修；模块拆分/i18n/版本构建保留待定 |
+| P3 架构 | 🔶 部分 | appId 已收敛；模块拆分/i18n/版本构建保留待定 |
 
 ## 工程定位
 
 | 项目 | 说明 |
 |---|---|
 | 类型 | Tampermonkey 油猴脚本（AGPL-3.0） |
-| 核心功能 | 抓取百度网盘直链，生成 `aria2c` / `curl` / RPC / 比特彗星下载命令 |
+| 核心功能 | 抓取百度网盘直链，生成 `aria2c` 命令或推送 RPC 下载任务 |
 | 附加功能 | 原生下载按钮接管、批量更名（含智能 SxxExx 改名）、IINA 播放、广告元素过滤、玻璃拟态 UI |
 | 外部依赖 | jQuery / sweetalert2（unpkg CDN @require；js-md5 已移除） |
 | 文档 | `README.md`、`docs/superpowers/{plans,specs}/`（glassmorphism 设计稿） |
@@ -53,15 +53,15 @@
 | 3 | `addButton()` | `${LOCAL_PAN_CONFIG.code == 200 && ...}` 更新提示为死代码（远程配置已下线） | ✅ 已删 |
 | 4 | 头部 | `@require js-md5` 引用但代码中从未调用 | ✅ 已移除 |
 | 5 | `initPanLinker()` | 写入 `setting_init_code` / `license`（值硬编码），无任何读取逻辑 | ✅ 已删（含常量） |
-| 6 | `terminalType` | `lt: "Linux 终端"` 与 `ls: "Linux Shell"` 重复 | ✅ 已删 lt，并加 lt→ls 迁移 |
+| 6 | cURL / BC 下载 | 菜单、生成逻辑及仅供 cURL 使用的终端类型配置 | ✅ 已移除 |
 
 ## P3 · 架构与可维护性
 
 | # | 位置 | 问题 | 建议 | 状态 |
 |---|---|---|---|---|
-| 1 | 全文件 | 2119 行单文件 monolith，HTML 字符串拼接 + 内联样式大面积重复 | 拆分为模块 | 🔶 待定（油猴单文件分发合理，改动大） |
+| 1 | 全文件 | 2029 行单文件 monolith，HTML 字符串拼接 + 内联样式大面积重复 | 拆分为模块 | 🔶 待定（油猴单文件分发合理，改动大） |
 | 2 | 多处 | magic number/字符串：`app_id=250528`、`channel=chunlei` 等 | 收敛进 `LOCAL_PAN_CONFIG` 常量 | ✅ 部分（新增 `appId` 常量，URL 内嵌值暂保留） |
-| 3 | `e()/d()` | 使用废弃的 `unescape/escape + btoa/atob` | 改用 `TextEncoder/TextDecoder`（分块防栈溢出） | ✅ 已修 |
+| 3 | `e()/d()` | 仅供 BC 协议编码使用 | 随 BC 下载逻辑一起清理 | ✅ 已移除 |
 | 4 | 头部 | `@version` 与 README 需手工同步 | 构建脚本从单一版本源生成 | 🔶 待定（流程改进） |
 | 5 | 全文件 | 硬编码中文文案，无 i18n / 无错误日志上报 | 抽取文案常量表；统一日志 | 🔶 待定（非本轮） |
 | 6 | `getSelectedList()` 等 | 依赖百度内部模块 `require("system-core:...")` 与页面 `locals`，接口脆弱 | 统一 adapter + 多级 fallback | ✅ 部分（`getLogid` 已加保护，其余已有 try/catch） |
