@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              百度网盘助手
 // @namespace         https://github.com/syhyz1990/baiduyun
-// @version           1.0.28
+// @version           1.0.31
 // @author            Roc Deng
 // @description       支持批量获取百度网盘直链下载地址，脚本拉取文件后由浏览器保存。
 // @license           AGPL-3.0-or-later
@@ -804,8 +804,8 @@
                 filename = base.fixFilename(filename);
                 // Aria2 稳定参数：断点续传、8 线程、10MB 分片，兼顾速度和服务器压力。
                 if (platform === 'windows') {
-                    const quote = (value) => `'${String(value).replace(/'/g, "''")}'`;
-                    return `aria2c.exe ${quote(link)} -c -s 8 -x 8 -k 10M --dir ${quote('D:\\')} --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
+                    const quote = (value) => `"${String(value).replace(/"/g, '""')}"`;
+                    return `aria2c.exe ${quote(link)} -c -s 8 -x 8 -k 10M --dir ${quote('D:\\.')} --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
                 }
                 return `aria2c "${link}" -c -s 8 -x 8 -k 10M --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
             }
