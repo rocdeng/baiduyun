@@ -1098,6 +1098,68 @@
             document.addEventListener('click', handleNativeDownload, true);
         },
 
+        // 把百度原生“重命名”按钮和“分享”按钮互换 DOM 位置：
+        // 重命名换到工具栏第一位，分享换到原来重命名所在的“更多”菜单里。
+        // 两个按钮各自的原生事件、disabled 状态完全保留，只挪动 DOM 位置和外层 class。
+        // 注意：这两个按钮的 style.height 是 Vue 组件按其内部状态持续写回的响应式样式
+        // （不是只在初次渲染时设置一次），单纯用 JS 改一次 style.height 会在用户再次
+        // hover 触发组件重新渲染时被 Vue 悄悄改回原值，导致按钮高度时对时错地“跳动”。
+        // 因此高度和文字展示改用注入的全局 CSS 规则（!important）压制，
+        // CSS 的优先级高于不带 !important 的内联 style，Vue 再怎么重写 style.height
+        // 都不会覆盖 !important 规则，从根源避免和框架抢属性的竞态问题。
+        ensureShareRenameSwapStyle() {
+            if (document.getElementById('pl-share-rename-swap-style')) return;
+            const style = document.createElement('style');
+            style.id = 'pl-share-rename-swap-style';
+            style.textContent = `
+                /* 挪到浮动栏（h 位置）的“重命名”：强制按浮动栏纯图标样式展示 */
+                button[title="重命名"][data-pl-swapped="1"].wp-s-agile-tool-bar__h-action-button {
+                    height: 50px !important;
+                }
+                button[title="重命名"][data-pl-swapped="1"].wp-s-agile-tool-bar__h-action-button span {
+                    display: none !important;
+                }
+                /* 挪到菜单（v 位置）的“分享”：强制按菜单图标+文字样式展示 */
+                button[title="分享"][data-pl-swapped="1"].wp-s-agile-tool-bar__v-action-button {
+                    height: 30px !important;
+                }
+            `;
+            document.head.appendChild(style);
+        },
+
+        swapNativeShareAndRename() {
+            this.ensureShareRenameSwapStyle();
+            const H_CLASS = 'wp-s-agile-tool-bar__h-action-button';
+            const V_CLASS = 'wp-s-agile-tool-bar__v-action-button';
+            const scopes = new Set();
+            document.querySelectorAll(`button[title="分享"].${H_CLASS}`).forEach((btn) => {
+                const scope = btn.closest('tr.wp-s-pan-table__body-row, tr[data-id]') || btn.closest('.wp-s-agile-tool-bar__header');
+                if (scope) scopes.add(scope);
+            });
+            scopes.forEach((scope) => {
+                const shareBtn = scope.querySelector(`button[title="分享"].${H_CLASS}`);
+                const renameBtn = scope.querySelector(`button[title="重命名"].${V_CLASS}`);
+                if (!shareBtn || !renameBtn || shareBtn.dataset.plSwapped === '1') return;
+                const shareParent = shareBtn.parentNode;
+                const shareNext = shareBtn.nextSibling;
+                const renameParent = renameBtn.parentNode;
+                const renameNext = renameBtn.nextSibling;
+                renameParent.insertBefore(shareBtn, renameNext);
+                shareParent.insertBefore(renameBtn, shareNext);
+                // 互换外层样式 class，让容器尺寸/间距跟随新位置。
+                shareBtn.classList.remove(H_CLASS);
+                shareBtn.classList.add(V_CLASS);
+                renameBtn.classList.remove(V_CLASS);
+                renameBtn.classList.add(H_CLASS);
+                // 菜单里的“分享”原本没有文字（h 位置渲染时文字留空），补上文字节点；
+                // 浮动栏里的“重命名”文字由上面注入的 CSS 直接 display:none 隐藏，无需清空内容。
+                const shareSpan = shareBtn.querySelector('span');
+                if (shareSpan) shareSpan.textContent = '分享';
+                shareBtn.dataset.plSwapped = '1';
+                renameBtn.dataset.plSwapped = '1';
+            });
+        },
+
         addButton() {
             if (!pt) return;
             this.addPageListener();
@@ -1982,13 +2044,18 @@
                 let filterTimer = null;
                 const applyFilters = () => {
                     clearTimeout(filterTimer);
-                    filterTimer = setTimeout(() => base.removeFilteredElements(), 200);
+                    filterTimer = setTimeout(() => {
+                        base.removeFilteredElements();
+                        // 文件行按钮是动态渲染的，需持续把新出现的“分享/重命名”互换位置。
+                        this.swapNativeShareAndRename();
+                    }, 200);
                 };
                 window.__plYunyiduoObserver = new MutationObserver(applyFilters);
                 window.__plYunyiduoObserver.observe(document.body || document.documentElement, { childList: true, subtree: true });
             }
             // 页面过滤规则可在助手设置中修改，默认保留现有广告与云一朵规则。
             this.addButton();
+            this.swapNativeShareAndRename();
             base.createTip();
             base.registerMenuCommand();
         },
