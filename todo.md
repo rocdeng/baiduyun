@@ -1,17 +1,19 @@
 # 百度网盘助手 优化清单
 
-> 分析对象：`panlinker.user.js`（v1.0.31，2026 行，单文件油猴脚本）
-> 生成时间：2026-08-01
-> 修复时间：2026-08-01
+> 分析对象：`panlinker.user.js`（v1.0.31，单文件油猴脚本）
+> 初版复审：2026-09-16 ｜ 修复：2026-09（Opus 完成 P1/P2 主体）｜ 收尾复核：2026-09-17
+> 当前状态：**P1/P2 已全部修复并复核通过**，仅剩 P3 架构/工程化 backlog
 
 ## 修复进度
 
 | 级别 | 状态 | 说明 |
 |---|---|---|
-| P0 缺陷/风险 | ✅ 5/6 已修 | BDUSS 条目为必需鉴权，保留原行为 |
-| P1 性能/体验 | ✅ 4/5 已修 | P1-5（批量更名后刷新）保留 |
-| P2 死代码清理 | ✅ 6/6 已修 | |
-| P3 架构 | 🔶 部分 | appId 已收敛；模块拆分/i18n/版本构建保留待定 |
+| P1 缺陷/风险 | ✅ 7/7 已修 | 见下方逐项记录，已通过语法校验与注入测试 |
+| P2 死代码/清理 | ✅ 8/8 已修 | api 下载链路、findReact 等约 260+ 行已删 |
+| P2 收尾 | ✅ 已处理 | 孤儿 CSS、`base.sleep`、`getCurrentFileList` 可选链、README 错别字（2026-09-17） |
+| P3 架构/工程化 | 🔶 未启动 | 油猴单文件分发合理，按需排期 |
+
+脚本从 2029 行精简到 1862 行；已用 Node `new Function(...)` 做语法解析校验，文件保持纯 CRLF 无混合换行。
 
 ## 工程定位
 
@@ -20,56 +22,59 @@
 | 类型 | Tampermonkey 油猴脚本（AGPL-3.0） |
 | 核心功能 | 抓取百度网盘直链，生成 `aria2c` 命令或推送 RPC 下载任务 |
 | 附加功能 | 原生下载按钮接管、批量更名（含智能 SxxExx 改名）、IINA 播放、广告元素过滤、玻璃拟态 UI |
-| 外部依赖 | jQuery / sweetalert2（unpkg CDN @require；js-md5 已移除） |
-| 文档 | `README.md`、`docs/superpowers/{plans,specs}/`（glassmorphism 设计稿） |
+| 外部依赖 | jQuery 3.7.0 / sweetalert2 10.16.6（均经 unpkg CDN `@require`） |
 
-## P0 · 缺陷与风险（建议尽快处理）
+## P1 · 缺陷与风险（✅ 已全部修复）
 
-| # | 位置 | 问题 | 建议 | 状态 |
+| # | 位置 | 问题 | 修复方式 | 状态 |
 |---|---|---|---|---|
-| 1 | `panlinker.user.js` `showSetting()` | 每次打开设置都用 `doc.on()` 绑定 `.listener-color`/`.listener-*`，关闭再打开会**累积重复 handler**，触发一次执行多次 | 提取到一次性绑定，或绑定前 `doc.off()` | ✅ 已修（命名空间 `.pl-setting` + `off`） |
-| 2 | `panlinker.user.js` `getLogid()` | `require("system-core:context/context.js")` 无 try/catch，share 页上下文缺失时直接抛错，中断整个分享下载流程 | 包 try/catch，失败时降级返回 '' | ✅ 已修 |
-| 3 | `panlinker.user.js` `handleNativeDownload()` | `e.__plNativeDownloadHandled` 直接往原生事件对象塞属性；且 `preventDefault/stopPropagation` 先于 `e.type !== 'click'` 判断执行，非 click 事件也被拦截 | 先判断 `e.type`，改用 WeakSet 记录已处理事件 | ✅ 已修 |
-| 4 | `panlinker.user.js` `getPCSLink()` | 用 `fidList.length === 2` 判断"空文件列表"（依赖字符串 `'[]'` 长度），脆弱易误判 | 改为 `fidList === '[]'` | ✅ 已修 |
-| 5 | `panlinker.user.js` `getBDUSS` | BDUSS 是下载/播放的**必需鉴权**（直链不带即 401），不能关闭，只能风险缓解 | 保留现有行为；弹窗内增加"命令含登录凭证，请勿外发"提示 | ⚠️ 保留（必需鉴权） |
-| 6 | `panlinker.user.js` `getBdstoken()` | 遍历所有 `<script>` 用正则扫 `bdstoken`，可能误匹配其他内容 | 限定含登录上下文的脚本，保留 fallback | ✅ 已修 |
+| 1 | `createTip()` | tooltip 用 `.html()` 注入未转义文件名，分享页恶意文件名可存储型 XSS | 文件名/体积拆为独立 `<span>`，全程 `textContent` 赋值 | ✅ |
+| 2 | `convertLinkToAria()` | Mac 命令不做 shell 转义，文件名含 `$()`/反引号/换行可注入任意命令 | 新增 `sanitizeDownloadLink()`（强制 https、剥空白/控制符/引号）；POSIX 侧 `'…'` + `'\''` 转义；非法直链返回错误提示 | ✅ |
+| 3 | `getPCSLink()` | `base.get` 无 try/catch，超时后 loading 永久转圈、`nativeDownloadBusy` 不复位 | 菜单点击、原生接管、`getPCSLink` 三处分别 try/catch/finally 收口并复位状态 | ✅ |
+| 4 | `getShareData()` | `locals.dump()` 与 `.value` 无保护，上下文缺失即抛 TypeError | 逐项可选链 + `pick()` 归一化，bdstoken 回退 `getBdstoken()`，并返回布尔成败 | ✅ |
+| 5 | `initAuthorize()` | `setInterval` 不清理；token 正则在 URL 末尾匹配失败并对 null 解包 | 命中即 `clearInterval`；正则改 `([^&#]+)`；另加 60s 兜底停表 | ✅ |
+| 6 | `addButton()` | 仅注入一次，SPA 工具栏晚渲染则按钮永不出现 | 拆 `injectButton()` + MutationObserver，150ms 防抖、成功即断开、30s 自毁 | ✅ |
+| 7 | RPC 地址 | 设置中的 RPC 地址未转义，可注入引号/HTML | `escapeAttr`（属性）+ `escapeHtml`（文本）双口径；设置框 input 统一 `settingValue()` 转义 | ✅ |
 
-## P1 · 性能与体验
+## P2 · 死代码与清理（✅ 已全部修复）
 
-| # | 位置 | 问题 | 建议 | 状态 |
-|---|---|---|---|---|
-| 1 | `initPanLinker()` | MutationObserver + 每秒 `setInterval` **双通道**跑 `removeFilteredElements()`，重复扫描全 DOM，浪费性能；observer 挂 `window` 跨页面残留 | 只保留 MutationObserver，`throttle` 合并 | ✅ 已修（observer + 200ms 节流，移除 setInterval） |
-| 2 | `showSetting()` | 点击主题色后 `history.go(0)` 整页刷新，体验差 | 主题色 CSS 变量化，热替换无需刷新 | ✅ 已修（`--pl-primary` 变量 + `applyThemeColor`） |
-| 3 | `showSetting()` | 设置项每次 `input` 立即 `GM_setValue`，高频写存储 | 加防抖，统一在失焦/关闭时提交 | ✅ 已修（400ms 防抖） |
-| 4 | `base.get/post` | 无超时与重试，请求挂起时 UI 一直 loading | 加超时（30s），blob 下载例外（传 0） | ✅ 已修 |
-| 5 | `showBatchRenameDialog()` | 批量更名提交后 `location.reload()` 强刷页面 | 无法可靠注入页面内部刷新（依赖百度内部模块，脆弱），保留 reload | ⚠️ 保留（强刷为稳妥方案） |
+| # | 内容 | 状态 |
+|---|---|---|
+| 1 | 删除不可达的 `downloadMode === 'api'` 全链路：api 分支 DOM、`.listener-link-api/.listener-how/.listener-retry/.listener-back` 绑定、`idm/ins/progress/request` 状态机、blob 下载与 onprogress、204 处理、`CONFIG.api`；`base.get` 签名由 5 参简化为 4 参 | ✅ |
+| 2 | 删除零调用的 `resolveFileItemFromDom()` + `findReact()`（约 60 行） | ✅ |
+| 3 | 删除 `message.question` 与 `.pl-retry/.pl-browserdownload/.pl-ext` 等死 CSS | ✅ |
+| 3b | 2026-09-17 再清孤儿 CSS：`.pl-dropdown-menu-item`、`.pl-button-init`、`@keyframes easeInitOpacity/easeOpacity`、`.element-clicked`；删除未调用的 `base.sleep` | ✅ |
+| 4 | `getBDUSS()` 存储键收敛为 `BDUSS_STORAGE_KEY` 常量，修正无效 fallback、消除重复读取 | ✅ |
+| 5 | `setBDUSS()` 取不到时删除旧值，避免换号后 aria 命令携带过期凭证；新增 `deleteStorage()` | ✅ |
+| 6 | `sizeFormat(0)` 下标夹取到 `[0, unit.length-1]`，修复 `NaNundefined` | ✅（实测 0→0.0B） |
+| 7 | `getExtension()` 改正则为 `/\.([^.\\/]+)$/`，无扩展名返回空 | ✅ |
+| 8 | 文案：「剪切板」→「剪贴板」（脚本 + README），移除过时 XDown 描述 | ✅ |
 
-## P2 · 死代码与清理（低风险，可直接删）
+## P2 收尾额外修复（Opus 顺手处理）
 
-| # | 位置 | 问题 | 状态 |
-|---|---|---|---|
-| 1 | `detectPage()` | 重复 `return '';` | ✅ 已删 |
-| 2 | `base` 对象 | `createDownloadIframe()` / `getMirrorList()` / `listenElement()` 定义后从未调用 | ✅ 已删 |
-| 3 | `addButton()` | `${LOCAL_PAN_CONFIG.code == 200 && ...}` 更新提示为死代码（远程配置已下线） | ✅ 已删 |
-| 4 | 头部 | `@require js-md5` 引用但代码中从未调用 | ✅ 已移除 |
-| 5 | `initPanLinker()` | 写入 `setting_init_code` / `license`（值硬编码），无任何读取逻辑 | ✅ 已删（含常量） |
-| 6 | cURL / BC 下载 | 菜单、生成逻辑及仅供 cURL 使用的终端类型配置 | ✅ 已移除 |
+- `getSelectedList()` 的 `__vue__` 兜底加可选链与双重 try/catch；`getCurrentFileList()` 于 2026-09-17 统一为同样写法。
+- 复制成功 toast 增加「命令含登录凭证且直链有时效，请尽快使用、请勿外发」。
 
-## P3 · 架构与可维护性
+## P3 · 架构、安全与工程化（🔶 待排期）
 
-| # | 位置 | 问题 | 建议 | 状态 |
-|---|---|---|---|---|
-| 1 | 全文件 | 2026 行单文件 monolith，HTML 字符串拼接 + 内联样式大面积重复 | 拆分为模块 | 🔶 待定（油猴单文件分发合理，改动大） |
-| 2 | 多处 | magic number/字符串：`app_id=250528`、`channel=chunlei` 等 | 收敛进 `LOCAL_PAN_CONFIG` 常量 | ✅ 部分（新增 `appId` 常量，URL 内嵌值暂保留） |
-| 3 | `e()/d()` | 仅供 BC 协议编码使用 | 随 BC 下载逻辑一起清理 | ✅ 已移除 |
-| 4 | 头部 | `@version` 与 README 需手工同步 | 构建脚本从单一版本源生成 | 🔶 待定（流程改进） |
-| 5 | 全文件 | 硬编码中文文案，无 i18n / 无错误日志上报 | 抽取文案常量表；统一日志 | 🔶 待定（非本轮） |
-| 6 | `getSelectedList()` 等 | 依赖百度内部模块 `require("system-core:...")` 与页面 `locals`，接口脆弱 | 统一 adapter + 多级 fallback | ✅ 部分（`getLogid` 已加保护，其余已有 try/catch） |
+| # | 主题 | 建议 |
+|---|---|---|
+| 1 | CDN 供应链 | 两个 `@require` 走 unpkg 无 SRI，sweetalert2 10.16.6 偏旧；升级 11.x 或本地化打包 |
+| 2 | 单文件 monolith | 约 150 行 CSS 模板字符串 + 大段内联 `style`（批量更名弹窗尤甚）；源码侧拆分、构建期拼回单文件 |
+| 3 | 版本源 | `@version` 与 README「当前版本号」手工同步；建议单一 version 常量 + 构建注入 |
+| 4 | i18n/日志 | 中文文案散落逻辑中，集中到 `MESSAGES` 常量表；网络错误在 `base.get/post` 统一兜底 |
+| 5 | 工程基建 | 无 package.json/lint/测试；引入 ESLint + Prettier；为 `buildSeasonRename/buildSmartRename/applyRenameDeleteText` 等纯函数补单测 |
+| 6 | 默认 AppKey | 内置公开 client_id，建议设置框标注「公共默认、配额共享」，引导自建应用 |
+| 7 | RPC 保存路径 | aria 命令在 Windows 写死 `--dir "D:\."`，忽略用户设置且非 Windows 无 `--dir`；建议读保存路径并做平台归一化 |
+| 8 | 选择器健壮性 | 原生下载按钮依赖中文 `button[title="下载"]`，百度改文案即失效；增加 class/图标多重 fallback + 接管开关 |
+| 9 | MutationObserver | 过滤 observer 全 subtree 扫描，可只扫 `mutations.addedNodes` 子树 |
+| 10 | `getToken()` 体验 | 60s 等待超时后静默返回空串，建议 toast 引导用户重新授权 |
+| 11 | AGENTS.md | 当前为记忆系统占位内容，可补充构建/测试/风格约定 |
 
 ## 非代码建议
 
-| # | 事项 | 说明 |
-|---|---|---|
-| 1 | 依赖 CDN 本地化 | `unpkg` 三连发在国内首屏加载慢/易失败，可打包进脚本或提供镜像 |
-| 2 | 恢复"更新检测"需谨慎 | README 明确移除第三方远程配置，若再引入更新检测需自建接口并默认关闭 |
-| 3 | 直链时效 | `dlink` 带 `access_token` 有时效，UI 可提示"命令生成后请尽快使用" |
+| # | 事项 |
+|---|---|
+| 1 | ~~复制成功时提示凭证风险与直链时效~~ 已在 P2 收尾落地 |
+| 2 | 文件夹报错文案可再明确「进入文件夹后选择具体文件」 |
+| 3 | README 可补「故障自查」：未读到 BDUSS（需 Tampermonkey BETA 授权 cookie）、9019 重新授权、按钮不出现时刷新页面 |

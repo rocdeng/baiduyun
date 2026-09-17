@@ -41,12 +41,14 @@
     'use strict';
 
     let pt = '', selectList = [], params = {}, mode = '', width = 800, pan = {}, color = '',
-        doc = $(document), progress = {}, request = {}, ins = {}, idm = {},
+        doc = $(document),
         nativeDownloadBusy = false,
         nativeDownloadRow = null,
         pageListenersReady = false, tipReady = false, menuCommandReady = false;
     const manageHandler = GM_info.scriptHandler;
     const manageVersion = GM_info.version;
+    // BDUSS 缓存的 localStorage 键，统一常量避免读写两侧写错键名。
+    const BDUSS_STORAGE_KEY = 'baiduyunPlugin_BDUSS';
     const customClass = {
         popup: 'pl-popup',
         header: 'pl-header',
@@ -79,13 +81,9 @@
             main: '.wp-s-agile-tool-bar__header',
             share: '.module-share-top-bar .x-button-box'
         },
-        api: [
-            'Aria下载（生成 aria2c 命令）',
-            '点击后复制 aria2c 命令，粘贴到支持 aria2c 协议的下载器或终端中。'
-        ],
         aria: [
-            'Aria下载（适用于 XDown 及 Linux Shell 命令行）',
-            '点击链接复制地址到剪切板，粘贴到支持 aria2c 协议的下载器中，例如 XDown、Linux Shell，建议配合超级会员使用。'
+            'Aria下载（生成 aria2c 命令）',
+            '点击链接即可复制对应平台的 aria2c 命令，粘贴到终端或支持 aria2c 的下载器中执行，建议配合超级会员使用。'
         ],
         rpc: [
             'RPC下载（适用于 Motrix、Aria2 Tools、AriaNgGUI）',
@@ -93,6 +91,7 @@
         ],
         assistant: '请先登录网盘后再生成链接',
         tampermonkeyTip: '请安装更强大的 Tampermonkey BETA (红色图标) 替换 Tampermonkey (黑色图标)，然后重新安装本助手！',
+        invalidLinkTip: '该文件返回的直链格式异常，已阻止生成命令，请刷新页面后重试！',
         ua: 'pan.baidu.com',
         footer: '<div style=\"text-align: center;\">RPC配置说明已内置在本地配置中，修改后自动生效</div>'
     });
@@ -121,9 +120,6 @@
         },
         info: (text) => {
             toast.fire({title: text, icon: 'info'});
-        },
-        question: (text) => {
-            toast.fire({title: text, icon: 'question'});
         }
     };
 
@@ -170,6 +166,14 @@
             return localStorage.setItem(key, value);
         },
 
+        deleteStorage(key) {
+            try {
+                localStorage.removeItem(key);
+            } catch (e) {
+                // 隐私模式下 localStorage 可能不可写，忽略即可。
+            }
+        },
+
         setClipboard(text) {
             const value = String(text ?? '').replace(/(?:\r\n|\r|\n)+$/g, '');
             if (!value) return false;
@@ -212,18 +216,20 @@
         },
 
         getExtension(name) {
-            const reg = /(?!\.)\w+$/;
-            if (reg.test(name)) {
-                let match = name.match(reg);
-                return match[0].toUpperCase();
-            }
-            return '';
+            // 旧正则 /(?!\.)\w+$/ 的负向前瞻恒真（\w+ 本身不会以点开头），
+            // 导致 .gitignore 返回 GITIGNORE、README 这类无扩展名文件返回自身。
+            // 这里要求必须真的存在一个点，且点后不含路径分隔符。
+            const match = String(name ?? '').match(/\.([^.\\/]+)$/);
+            return match ? match[1].toUpperCase() : '';
         },
 
         sizeFormat(value) {
             if (value === +value) {
                 let unit = ["B", "KB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"];
-                let index = Math.floor(Math.log(value) / Math.log(1024));
+                // value 为 0 时 Math.log(0) = -Infinity，index 会变成 -Infinity，
+                // 输出 "NaNundefined"，必须把下标夹取到合法区间。
+                let index = value > 0 ? Math.floor(Math.log(value) / Math.log(1024)) : 0;
+                index = Math.min(Math.max(index, 0), unit.length - 1);
                 let size = value / Math.pow(1024, index);
                 size = size.toFixed(1);
                 return size + unit[index];
@@ -246,15 +252,13 @@
             return name.replace(/[!?&|`"'*\/:<>\\]/g, '_');
         },
 
-        blobDownload(blob, filename) {
-            if (blob instanceof Blob) {
-                const url = URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = filename;
-                a.click();
-                URL.revokeObjectURL(url);
-            }
+        sanitizeDownloadLink(link) {
+            // 直链会被拼进 shell 命令，先剔除空白与控制字符（换行可另起一条命令），
+            // 再剔除引号/反引号/反斜杠（会打破引用），最后要求必须是 https 直链。
+            const raw = String(link ?? '')
+                .replace(/[\s\u0000-\u001f\u007f]/g, '')
+                .replace(/["'`\\]/g, '');
+            return /^https:\/\/[^\s]+$/i.test(raw) ? raw : '';
         },
 
         post(url, data, headers, type, timeout = 30000) {
@@ -279,9 +283,9 @@
             });
         },
 
-        get(url, headers, type, extra, timeout = 30000) {
+        get(url, headers, type, timeout = 30000) {
             return new Promise((resolve, reject) => {
-                let requestObj = GM_xmlhttpRequest({
+                GM_xmlhttpRequest({
                     method: "GET", url, headers,
                     responseType: type || 'json',
                     timeout,
@@ -289,24 +293,7 @@
                         reject(new Error('请求超时'));
                     },
                     onload: (res) => {
-                        if (res.status === 204) {
-                            requestObj.abort();
-                            idm[extra.index] = true;
-                        }
-                        if (type === 'blob') {
-                            res.status === 200 && base.blobDownload(res.response, extra.filename);
-                            resolve(res);
-                        } else {
-                            resolve(res.response || res.responseText);
-                        }
-                    },
-                    onprogress: (res) => {
-                        if (extra && extra.filename && extra.index !== undefined) {
-                            res.total > 0 ? progress[extra.index] = (res.loaded * 100 / res.total).toFixed(2) : progress[extra.index] = 0.00;
-                        }
-                    },
-                    onloadstart() {
-                        extra && extra.filename && extra.index !== undefined && (request[extra.index] = requestObj);
+                        resolve(res.response || res.responseText);
                     },
                     onerror: (err) => {
                         reject(err);
@@ -357,43 +344,9 @@
             doc.getElementsByTagName('head')[0].appendChild(style);
         },
 
-        sleep(time) {
-            return new Promise(resolve => setTimeout(resolve, time));
-        },
-
         getMajorVersion(version) {
             const [major] = (version || '').split('.');
             return /^\d+$/.test(major) ? major : null;
-        },
-
-        findReact(dom, traverseUp = 0) {
-            const key = Object.keys(dom).find(key => {
-                return key.startsWith("__reactFiber$")
-                    || key.startsWith("__reactInternalInstance$");
-            });
-            const domFiber = dom[key];
-            if (domFiber == null) return null;
-
-            if (domFiber._currentElement) {
-                let compFiber = domFiber._currentElement._owner;
-                for (let i = 0; i < traverseUp; i++) {
-                    compFiber = compFiber._currentElement._owner;
-                }
-                return compFiber._instance;
-            }
-
-            const GetCompFiber = fiber => {
-                let parentFiber = fiber.return;
-                while (typeof parentFiber.type == "string") {
-                    parentFiber = parentFiber.return;
-                }
-                return parentFiber;
-            };
-            let compFiber = GetCompFiber(domFiber);
-            for (let i = 0; i < traverseUp; i++) {
-                compFiber = GetCompFiber(compFiber);
-            }
-            return compFiber.stateNode || compFiber;
         },
 
         initDefaultConfig() {
@@ -441,12 +394,14 @@
             let dom = '', btn = '',
                 colorList = ['#09AAFF', '#cc3235', '#526efa', '#518c17', '#ed944b', '#f969a5', '#bca280'];
             dom += `<div class="pl-setting-group pl-setting-connection"><div class="pl-setting-group-title">连接设置</div><div class="pl-setting-group-desc">用于生成下载链接和推送任务。</div><div class="pl-setting-fields">`;
-            dom += `<label class="pl-setting-field"><span>RPC主机</span><input type="text" placeholder="需带上 http(s)://" class="pl-input listener-domain" value="${base.getValue('setting_rpc_domain')}"></label>`;
-            dom += `<label class="pl-setting-field"><span>RPC端口</span><input type="text" placeholder="例如 16800" class="pl-input listener-port" value="${base.getValue('setting_rpc_port')}"></label>`;
-            dom += `<label class="pl-setting-field"><span>RPC路径</span><input type="text" placeholder="默认 /jsonrpc" class="pl-input listener-path" value="${base.getValue('setting_rpc_path')}"></label>`;
-            dom += `<label class="pl-setting-field"><span>RPC密钥</span><input type="text" placeholder="无密钥无需填写" class="pl-input listener-token" value="${base.getValue('setting_rpc_token')}"></label>`;
-            dom += `<label class="pl-setting-field"><span>保存路径</span><input type="text" placeholder="例如 D:" class="pl-input listener-dir" value="${base.getValue('setting_rpc_dir')}"></label>`;
-            dom += `<label class="pl-setting-field"><span>百度 AppKey</span><input type="text" placeholder="百度开放平台 AppKey" class="pl-input listener-appkey" value="${base.getValue('setting_baidu_appkey')}"></label></div></div>`;
+            // 设置项会被拼回 HTML，统一走 escapeAttr，避免用户填入引号后撑破属性。
+            const settingValue = (key) => base.escapeAttr(base.getValue(key) ?? '');
+            dom += `<label class="pl-setting-field"><span>RPC主机</span><input type="text" placeholder="需带上 http(s)://" class="pl-input listener-domain" value="${settingValue('setting_rpc_domain')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC端口</span><input type="text" placeholder="例如 16800" class="pl-input listener-port" value="${settingValue('setting_rpc_port')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC路径</span><input type="text" placeholder="默认 /jsonrpc" class="pl-input listener-path" value="${settingValue('setting_rpc_path')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>RPC密钥</span><input type="text" placeholder="无密钥无需填写" class="pl-input listener-token" value="${settingValue('setting_rpc_token')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>保存路径</span><input type="text" placeholder="例如 D:" class="pl-input listener-dir" value="${settingValue('setting_rpc_dir')}"></label>`;
+            dom += `<label class="pl-setting-field"><span>百度 AppKey</span><input type="text" placeholder="百度开放平台 AppKey" class="pl-input listener-appkey" value="${settingValue('setting_baidu_appkey')}"></label></div></div>`;
 
             colorList.forEach((v) => {
                 btn += `<div data-color="${v}" style="background: ${v};border: 1px solid ${v}" class="pl-color-box listener-color ${v === base.getValue('setting_theme_color') ? 'checked' : ''}"></div>`;
@@ -515,21 +470,26 @@
         createTip() {
             if (tipReady) return;
             tipReady = true;
-            $('body').append('<div class="pl-tooltip"></div>');
+            // 文件名与体积分别放进独立节点，全程只用 textContent 赋值：
+            // 分享页的文件名由他人命名，任何 HTML 拼接都会造成存储型 XSS。
+            $('body').append('<div class="pl-tooltip"><span class="pl-tooltip-name"></span><span class="pl-tooltip-size"></span></div>');
 
             doc.on('mouseenter mouseleave', '.listener-tip', (e) => {
+                const tooltip = document.querySelector('.pl-tooltip');
+                if (!tooltip) return;
                 if (e.type === 'mouseenter') {
-                    let filename = e.currentTarget.innerText;
-                    let size = e.currentTarget.dataset.size;
-                    let tip = `${filename}<span style="margin-left: 10px;color: #f56c6c;">${size}</span>`;
+                    const nameNode = tooltip.querySelector('.pl-tooltip-name');
+                    const sizeNode = tooltip.querySelector('.pl-tooltip-size');
+                    if (nameNode) nameNode.textContent = e.currentTarget.textContent || '';
+                    if (sizeNode) sizeNode.textContent = e.currentTarget.dataset.size || '';
                     $(e.currentTarget).css({opacity: '0.5'});
-                    $('.pl-tooltip').html(tip).css({
+                    $(tooltip).css({
                         'left': e.pageX + 10 + 'px',
                         'top': e.pageY - e.currentTarget.offsetTop > 14 ? e.pageY + 'px' : e.pageY + 20 + 'px'
                     }).show();
                 } else {
                     $(e.currentTarget).css({opacity: '1'});
-                    $('.pl-tooltip').hide(0);
+                    $(tooltip).hide(0);
                 }
             });
         },
@@ -622,21 +582,6 @@
             .pl-item-name { flex: 0 0 180px; text-align: left; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; cursor:default; color: var(--pl-text-1); }
             .pl-item-size { flex: 0 0 88px; text-align:left; color: var(--pl-text-2); white-space: nowrap; }
             .pl-item-link { flex: 1; overflow: hidden; text-align: left; white-space: nowrap; text-overflow: ellipsis; cursor:pointer; color: var(--pl-primary); }
-            .pl-item-btn { background: var(--pl-primary); padding: 4px 10px; border-radius: var(--pl-radius-tag); line-height: 1; cursor: pointer; color: #fff; border: 0; }
-            .pl-item-tip { display: flex; justify-content: space-between; gap: 10px; flex: 1; color: var(--pl-text-2); }
-            .pl-back { width: 70px; background: rgba(255,255,255,0.6); color: var(--pl-text-1); border-radius: var(--pl-radius-tag); cursor:pointer; margin:1px 0; text-align: center; border: 1px solid rgba(255,255,255,0.5); }
-            .pl-ext { display: inline-block; width: 44px; background: rgba(0,0,0,0.06); color: var(--pl-text-1); height: 16px; line-height: 16px; font-size: 12px; border-radius: 4px; }
-            .pl-retry {padding: 3px 10px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
-            .pl-browserdownload { padding: 3px 10px; background: var(--pl-primary); color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;}
-            .pl-item-progress { display:flex; flex: 1; align-items:center; gap: 10px; }
-            .pl-progress { display: inline-block;vertical-align: middle;width: 100%; box-sizing: border-box;line-height: 1;position: relative;height: 16px; flex: 1; }
-            .pl-progress-outer { height: 16px;border-radius: 999px;background-color: rgba(0,0,0,0.06);overflow: hidden;position: relative;vertical-align: middle;border: 1px solid rgba(255,255,255,0.4); }
-            .pl-progress-inner{ position: absolute;left: 0;top: 0;background-color: var(--pl-primary);text-align: right;border-radius: 999px;line-height: 1;white-space: nowrap;transition: width .3s ease; box-shadow: inset 0 1px 0 rgba(255,255,255,0.4); }
-            .pl-progress-inner-text { display: inline-block;vertical-align: middle;color: var(--pl-text-2);font-size: 12px;margin: 0 6px;height: 16px}
-            .pl-progress-tip{ flex:1;text-align:right; color: var(--pl-text-2); }
-            .pl-progress-how{ flex: 0 0 88px; background: rgba(255,255,255,0.6); border-radius: var(--pl-radius-tag); margin-left: 0; cursor: pointer; text-align: center; color: var(--pl-text-1); border: 1px solid rgba(255,255,255,0.5); }
-            .pl-progress-stop{ flex: 0 0 60px; padding: 0 12px; background: #ff4d4f; color: #fff; border-radius: var(--pl-radius-tag); cursor: pointer;margin-left:0;height:24px; line-height: 24px; text-align:center; border: 0; }
-            .pl-progress-inner-text:after { display: inline-block;content: "";height: 100%;vertical-align: middle;}
             .pl-btn-primary { background: var(--pl-primary); border: 0; border-radius: var(--pl-radius-ctrl); color: #ffffff; cursor: pointer; font-family: var(--pl-font); font-size: 13px; outline: none; display:flex; align-items: center; justify-content: center; margin: 2px 0; padding: 8px 12px; transition: transform var(--pl-dur) var(--pl-ease), box-shadow var(--pl-dur) var(--pl-ease), opacity var(--pl-dur) var(--pl-ease); box-shadow: 0 2px 8px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.25); }
             .pl-btn-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.18), inset 0 1px 0 rgba(255,255,255,0.25); }
             .pl-btn-success { background: #52c41a; }
@@ -647,18 +592,12 @@
             .pl-rename-preview-name:hover { background: rgba(22,119,255,0.06); }
             .pl-rename-inline-input { display: block; width: 100%; min-width: 0; max-width: 100%; height: 32px; padding: 4px 8px; box-sizing: border-box; border: 1px solid #1677ff; border-radius: 6px; background: rgba(255,255,255,0.9); color: var(--pl-text-1); font: inherit; outline: none; box-shadow: 0 0 0 2px rgba(22,119,255,0.12); }
             .pl-dropdown-menu {position: absolute;right: 0;top: 36px;padding: 6px 0;color: var(--pl-text-1);background: var(--pl-glass-bg);backdrop-filter: var(--pl-glass-blur);-webkit-backdrop-filter: var(--pl-glass-blur);z-index: 999;width: 132px;border: 1px solid var(--pl-glass-border);border-radius: var(--pl-radius-card); box-shadow: var(--pl-shadow-sm), var(--pl-shadow-lg);}
-            .pl-dropdown-menu-item { height: 34px;display: flex;align-items: center;justify-content: center;cursor:pointer; padding: 0 12px; transition: background-color 0.16s var(--pl-ease); }
-            .pl-dropdown-menu-item:hover { background-color: rgba(0,0,0,0.06);}
             .pl-button .pl-dropdown-menu,
             .pl-button > .menu { display: none; }
             .pl-button:hover .pl-dropdown-menu,
             .pl-button:hover > .menu,
             .pl-button.button-open .pl-dropdown-menu,
             .pl-button.button-open > .menu { display: block!important; }
-            .pl-button-init { opacity: 0.5; animation: easeInitOpacity 1.2s 3; animation-fill-mode:forwards }
-             @keyframes easeInitOpacity { from { opacity: 0.5; } 50% { opacity: 1 } to { opacity: 0.5; } }
-             @keyframes easeOpacity { from { opacity: 1; } 50% { opacity: 0.35 } to { opacity: 1; } }
-            .element-clicked { opacity: 0.5; }
             .pl-extra { margin-top: 12px;display:flex; gap: 10px; }
             .pl-extra button { flex: 1}
             .pointer { cursor:pointer }
@@ -688,6 +627,7 @@
             .pl-close:focus { outline: 0; box-shadow: none; }
             .tag-danger {color:#cc3235;margin: 0 5px;}
             .pl-tooltip { position: absolute; color: #ffffff; max-width: 600px; font-family: var(--pl-font); font-size: 12px; padding: 8px 10px; background: rgba(20,28,44,0.72); backdrop-filter: blur(12px) saturate(140%); -webkit-backdrop-filter: blur(12px) saturate(140%); border: 1px solid rgba(255,255,255,0.12); border-radius: var(--pl-radius-tag); z-index: 110000; line-height: 1.4; display:none; word-break: break-all; box-shadow: 0 6px 16px rgba(0,0,0,0.2);}
+            .pl-tooltip-size { margin-left: 10px; color: #f56c6c; }
              @keyframes load { 0% { transform: rotate(0deg) } 100% { transform: rotate(360deg) } }
             .pl-loading-box > div > div { position: absolute;border-radius: 50%;}
             .pl-loading-box > div > div:nth-child(1) { top: 9px;left: 9px;width: 82px;height: 82px;background: #ffffff;}
@@ -740,24 +680,11 @@
 
         _getFidList() {
             let fidlist = [];
-            selectList.forEach(v => {
+            (selectList || []).forEach(v => {
                 if (+v.isdir === 1) return;
                 fidlist.push(v.fs_id);
             });
             return '[' + fidlist + ']';
-        },
-
-        _resetData() {
-            progress = {};
-            $.each(request, (key) => {
-                (request[key]).abort();
-            });
-            $.each(ins, (key) => {
-                clearInterval(ins[key]);
-            });
-            idm = {};
-            ins = {};
-            request = {};
         },
 
         setBDUSS() {
@@ -769,7 +696,10 @@
                     }
                     const BDUSS = (cookies || []).find(cookie => cookie?.name === 'BDUSS' && cookie.value)?.value || '';
                     if (BDUSS) {
-                        base.setStorage('baiduyunPlugin_BDUSS', {BDUSS});
+                        base.setStorage(BDUSS_STORAGE_KEY, {BDUSS});
+                    } else {
+                        // 退出账号或换号后必须清掉旧值，否则 aria 命令会一直带着过期凭证。
+                        base.deleteStorage(BDUSS_STORAGE_KEY);
                     }
                     resolve(BDUSS);
                 };
@@ -794,25 +724,37 @@
         },
 
         getBDUSS() {
-            let baiduyunPlugin_BDUSS = base.getStorage('baiduyunPlugin_BDUSS') ? base.getStorage('baiduyunPlugin_BDUSS') : '{"baiduyunPlugin_BDUSS":""}';
-            return baiduyunPlugin_BDUSS.BDUSS || '';
+            // 旧实现的 fallback 是一段未 JSON.parse 的字符串，取 .BDUSS 永远是 undefined，
+            // 等于兜底完全失效；这里直接读对象并可选链取值。
+            const stored = base.getStorage(BDUSS_STORAGE_KEY);
+            return stored?.BDUSS || '';
         },
 
         convertLinkToAria(link, filename, ua, platform = 'mac') {
             let BDUSS = this.getBDUSS();
-            if (!!BDUSS) {
-                filename = base.fixFilename(filename);
-                // Aria2 稳定参数：断点续传、8 线程、10MB 分片，兼顾速度和服务器压力。
-                if (platform === 'windows') {
-                    const quote = (value) => `"${String(value).replace(/"/g, '""')}"`;
-                    return `aria2c.exe ${quote(link)} -c -s 8 -x 8 -k 10M --dir ${quote('D:\\.')} --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
-                }
-                return `aria2c "${link}" -c -s 8 -x 8 -k 10M --out "${filename}" --header "User-Agent: ${ua}" --header "Cookie: BDUSS=${BDUSS}"`;
+            if (!BDUSS) {
+                return {
+                    link: LOCAL_PAN_CONFIG.assistant,
+                    text: LOCAL_PAN_CONFIG.tampermonkeyTip
+                };
             }
-            return {
-                link: LOCAL_PAN_CONFIG.assistant,
-                text: LOCAL_PAN_CONFIG.tampermonkeyTip
-            };
+            // dlink 由服务器下发，先收窄成纯 https 直链，避免换行或引号把命令截断成第二条指令。
+            const safeLink = base.sanitizeDownloadLink(link);
+            if (!safeLink) {
+                return {
+                    link: LOCAL_PAN_CONFIG.assistant,
+                    text: LOCAL_PAN_CONFIG.invalidLinkTip
+                };
+            }
+            filename = base.fixFilename(filename);
+            // Aria2 稳定参数：断点续传、8 线程、10MB 分片，兼顾速度和服务器压力。
+            if (platform === 'windows') {
+                const quote = (value) => `"${String(value).replace(/"/g, '""')}"`;
+                return `aria2c.exe ${quote(safeLink)} -c -s 8 -x 8 -k 10M --dir ${quote('D:\\.')} --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
+            }
+            // POSIX 侧统一用单引号包裹，内部单引号按 '\'' 拆分转义，粘贴到终端后不会执行任何子命令。
+            const quote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`;
+            return `aria2c ${quote(safeLink)} -c -s 8 -x 8 -k 10M --out ${quote(filename)} --header ${quote(`User-Agent: ${ua}`)} --header ${quote(`Cookie: BDUSS=${BDUSS}`)}`;
         },
 
         copyAriaCommands(commands) {
@@ -841,24 +783,6 @@
         addPageListener() {
             if (pageListenersReady) return;
             pageListenersReady = true;
-
-            function _factory(e) {
-                let target = $(e.target);
-                let item = target.parents('.pl-item');
-                let link = item.find('.pl-item-link');
-                let progress = item.find('.pl-item-progress');
-                let tip = item.find('.pl-item-tip');
-                return {
-                    item, link, progress, tip, target,
-                };
-            }
-
-            function _reset(i) {
-                ins[i] && clearInterval(ins[i]);
-                request[i] && request[i].abort();
-                progress[i] = 0;
-                idm[i] = false;
-            }
 
             const toggleDropdown = ($button, open) => {
                 const timer = $button.data('pl-dropdown-timer');
@@ -891,84 +815,14 @@
             doc.on('click', '.pl-button-mode', async (e) => {
                 mode = e.target.dataset.mode;
                 Swal.showLoading();
-                await this.setBDUSS();
-                this.getPCSLink();
-            });
-            doc.on('click', '.listener-link-api', async (e) => {
-                e.preventDefault();
-                let o = _factory(e);
-                let $width = o.item.find('.pl-progress-inner');
-                let $text = o.item.find('.pl-progress-inner-text');
-                let filename = o.link[0].dataset.filename;
-                let index = o.link[0].dataset.index;
-                let BDUSS = baidu.getBDUSS();
-                let headers = {"User-Agent": LOCAL_PAN_CONFIG.ua};
-                if (BDUSS) {
-                    headers.Cookie = `BDUSS=${BDUSS}`;
+                try {
+                    await this.setBDUSS();
+                    await this.getPCSLink();
+                } catch (error) {
+                    // 不 catch 的话请求超时会让 loading 弹窗永久转圈，用户只能刷新页面。
+                    Swal.close();
+                    message.error(`提示：${error?.message || '获取下载链接失败，请刷新网页后重试！'}`);
                 }
-                _reset(index);
-                o.link.hide();
-                o.tip.hide();
-                o.progress.show();
-                base.get(o.link[0].dataset.link, headers, 'blob', {filename, index}, 0).then((res) => {
-                    if (res.status !== 200) {
-                        o.progress.hide();
-                        o.tip.find('.pl-tip-text').html(`下载失败（状态码：${res.status || '未知'}），请重试或改用 Aria。`);
-                        o.tip.show();
-                        o.link.show();
-                        return;
-                    }
-                    o.item.find('.pl-progress-stop').hide();
-                    o.item.find('.pl-progress-tip').html('下载完成，正在弹出浏览器保存框！');
-                }).catch(() => {
-                    o.progress.hide();
-                    o.tip.find('.pl-tip-text').html('下载失败，请重试或改用 Aria。');
-                    o.tip.show();
-                    o.link.show();
-                });
-                ins[index] = setInterval(() => {
-                    let prog = +progress[index] || 0;
-                    o.item.find('.pl-progress-tip').html('正在下载，完成后浏览器会弹出保存框。');
-                    o.progress.show();
-                    $width.css('width', prog + '%');
-                    $text.text(prog + '%');
-                    if (prog === 100) {
-                        clearInterval(ins[index]);
-                        progress[index] = 0;
-                    }
-                }, 500);
-            });
-            doc.on('click', '.listener-retry', async (e) => {
-                let o = _factory(e);
-                o.tip.hide();
-                o.link.show();
-            });
-            doc.on('click', '.listener-how', async (e) => {
-                let o = _factory(e);
-                let index = o.link[0].dataset.index;
-                if (request[index]) {
-                    request[index].abort();
-                    clearInterval(ins[index]);
-                    o.progress.hide();
-                    o.tip.show();
-                }
-
-            });
-            doc.on('click', '.listener-stop', async (e) => {
-                let o = _factory(e);
-                let index = o.link[0].dataset.index;
-                if (request[index]) {
-                    request[index].abort();
-                    clearInterval(ins[index]);
-                    o.tip.hide();
-                    o.progress.hide();
-                    o.link.show(0);
-                }
-            });
-            doc.on('click', '.listener-back', async (e) => {
-                let o = _factory(e);
-                o.tip.hide();
-                o.link.show();
             });
             doc.on('click', '.listener-link-aria, .listener-copy-all', (e) => {
                 e.preventDefault();
@@ -1089,6 +943,9 @@
                 nativeDownloadBusy = true;
                 try {
                     await this.getPCSLink(1, [fileItem]);
+                } catch (error) {
+                    Swal.close();
+                    message.error(`提示：${error?.message || '获取下载链接失败，请刷新网页后重试！'}`);
                 } finally {
                     setTimeout(() => {
                         nativeDownloadBusy = false;
@@ -1163,6 +1020,31 @@
         addButton() {
             if (!pt) return;
             this.addPageListener();
+            if (this.injectButton()) return;
+            // 工具栏是 SPA 异步渲染的，document-idle 时刻可能还不存在。
+            // 原实现只尝试一次，错过就再也不会出现按钮，用户只能刷新碰运气。
+            if (window.__plToolbarObserver) return;
+            let debounceTimer = null;
+            let giveUpTimer = null;
+            const stop = () => {
+                clearTimeout(debounceTimer);
+                clearTimeout(giveUpTimer);
+                window.__plToolbarObserver?.disconnect();
+                window.__plToolbarObserver = null;
+            };
+            const tryInject = () => {
+                clearTimeout(debounceTimer);
+                debounceTimer = setTimeout(() => {
+                    // 注入成功立刻停掉 observer，不长期挂在 document 上。
+                    if (this.injectButton()) stop();
+                }, 150);
+            };
+            window.__plToolbarObserver = new MutationObserver(tryInject);
+            window.__plToolbarObserver.observe(document.body || document.documentElement, {childList: true, subtree: true});
+            giveUpTimer = setTimeout(stop, 30000);
+        },
+
+        injectButton() {
             let $toolWrap;
             let $button = $(`<div class="g-dropdown-button pointer pl-button"><div style="color:#fff;background: var(--pl-primary);border-color:var(--pl-primary)" class="g-button g-button-blue"><span class="g-button-right"><em class="icon icon-download"></em><span class="text" style="width: 60px;">下载助手</span></span></div><div class="menu" style="width:auto;z-index:41;border-color:var(--pl-primary)"><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="aria">Aria下载</div><div style="color:var(--pl-primary)" class="g-button-menu pl-button-mode" data-mode="rpc">RPC下载</div><li class="g-button-menu listener-iina-play">用 IINA 播放</li><li class="g-button-menu listener-batch-rename">批量更名</li><li class="g-button-menu listener-open-setting">助手设置</li></div></div>`);
             if (pt === 'home') $toolWrap = $(LOCAL_PAN_CONFIG.btn.home);
@@ -1172,8 +1054,10 @@
                 $button.find('.listener-batch-rename').before('<li class="sub cursor-p listener-iina-play">用 IINA 播放</li>');
             }
             if (pt === 'share') $toolWrap = $(LOCAL_PAN_CONFIG.btn.share);
-            if (!$toolWrap.length || $toolWrap.children('.pl-button').length) return;
+            if (!$toolWrap || !$toolWrap.length) return false;
+            if ($toolWrap.children('.pl-button').length) return true;
             $toolWrap.prepend($button);
+            return true;
         },
 
         applyRenameDeleteText(text, deleteText) {
@@ -1609,7 +1493,7 @@
         },
 
         async getPCSLink(maxRequestTime = 1, customList = null, downloadMode = mode) {
-            selectList = customList || this.getSelectedList();
+            selectList = customList || this.getSelectedList() || [];
             let fidList = this._getFidList(), url, res;
 
             if (pt === 'home' || pt === 'main') {
@@ -1622,12 +1506,16 @@
                 fidList = encodeURIComponent(fidList);
                 let accessToken = base.getValue('baidu_access_token') || await this.getToken();
                 url = `${LOCAL_PAN_CONFIG.pcs[0]}&fsids=${fidList}&access_token=${accessToken}`;
-                res = await base.get(url, {"User-Agent": LOCAL_PAN_CONFIG.ua});
+                try {
+                    res = await base.get(url, {"User-Agent": LOCAL_PAN_CONFIG.ua});
+                } catch (error) {
+                    // 超时/网络中断在这里收口，原生下载接管路径也能拿到提示而不是静默失败。
+                    return message.error(`提示：${error?.message || '网络异常'}，请稍后重试！`);
+                }
             }
             if (pt === 'share') {
-                this.getShareData();
-                if (!params.bdstoken) {
-                    return message.error('提示：请先登录网盘！');
+                if (!this.getShareData()) {
+                    return message.error('提示：未读取到登录信息，请先登录网盘并刷新页面后重试！');
                 }
                 if (selectList.length === 0) {
                     return message.error('提示：请先勾选要下载的文件！');
@@ -1736,36 +1624,15 @@
             let content = '<div class="pl-main"><div class="pl-table-head"><div class="pl-th-name">文件名</div><div class="pl-th-size">大小</div><div class="pl-th-action">操作</div></div>';
             let ariaAllCommands = {mac: '', windows: ''};
             base.sortByName(list);
-            list.forEach((v, i) => {
+            list.forEach((v) => {
                 if (v.isdir === 1) return;
                 let filename = v.server_filename || v.filename;
                 let safeFilename = base.escapeHtml(filename);
                 let filenameAttr = base.escapeAttr(filename);
-                let ext = base.getExtension(filename);
-                let safeExt = base.escapeHtml(ext);
                 let size = base.sizeFormat(v.size);
                 let safeSize = base.escapeAttr(size);
                 let dlink = v.dlink + '&access_token=' + base.getValue('baidu_access_token');
                 let dlinkAttr = base.escapeAttr(dlink);
-                let dlinkText = base.escapeHtml(dlink);
-                if (downloadMode === 'api') {
-                    content += `<div class="pl-item">
-                                <div class="pl-item-name listener-tip" data-size="${safeSize}">${safeFilename}</div>
-                                <div class="pl-item-size">${safeSize}</div>
-                                <a class="pl-item-link pl-a listener-link-api" href="${dlinkAttr}" data-filename="${filenameAttr}" data-link="${dlinkAttr}" data-index="${i}">${dlinkText}</a>
-                                <div class="pl-item-tip" style="display: none"><span class="pl-tip-text">点击后将由脚本下载，完成后由浏览器保存。</span> <span class="pl-back listener-back">返回</span></div>
-                                <div class="pl-item-progress" style="display: none">
-                                    <div class="pl-progress">
-                                        <div class="pl-progress-outer"></div>
-                                        <div class="pl-progress-inner" style="width:5%">
-                                          <div class="pl-progress-inner-text">0%</div>
-                                        </div>
-                                    </div>
-                                    <span class="pl-progress-stop listener-stop">取消下载</span>
-                                    <span class="pl-progress-tip">正在准备下载</span>
-                                    <span class="pl-progress-how listener-how">下载说明</span>
-                                </div></div>`;
-                }
                 if (downloadMode === 'aria') {
                     let alink = this.convertLinkToAria(dlink, filename, LOCAL_PAN_CONFIG.ua, 'mac');
                     if (typeof (alink) === 'object') {
@@ -1798,7 +1665,10 @@
                 content += `<div class="pl-extra"><button class="pl-btn-primary listener-copy-all" data-command-kind="aria" data-link-mac="${base.escapeAttr(encodeURIComponent(ariaAllCommands.mac))}" data-link-windows="${base.escapeAttr(encodeURIComponent(ariaAllCommands.windows))}">复制全部链接</button></div>`;
             if (downloadMode === 'rpc') {
                 let rpc = base.getValue('setting_rpc_domain') + ':' + base.getValue('setting_rpc_port') + base.getValue('setting_rpc_path');
-                content += `<div class="pl-extra"><button class="pl-btn-primary listener-send-rpc">发送全部链接</button><button title="${rpc}" class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px">设置 RPC 参数（当前为：${rpc}）</button><button class="pl-btn-primary pl-btn-success listener-rpc-task" style="margin-left: 10px;display: none">查看下载任务</button></div>`;
+                // RPC 地址来自设置框，用户可以填入引号或标签，与文件名同口径做转义。
+                let rpcAttr = base.escapeAttr(rpc);
+                let rpcText = base.escapeHtml(rpc);
+                content += `<div class="pl-extra"><button class="pl-btn-primary listener-send-rpc">发送全部链接</button><button title="${rpcAttr}" class="pl-btn-primary pl-btn-warning listener-open-setting" style="margin-left: 10px">设置 RPC 参数（当前为：${rpcText}）</button><button class="pl-btn-primary pl-btn-success listener-rpc-task" style="margin-left: 10px;display: none">查看下载任务</button></div>`;
             }
             return {
                 html: content,
@@ -1839,9 +1709,14 @@
 
         getSelectedList() {
             try {
-                return require('system-core:context/context.js').instanceForSystem.list.getSelected();
+                return require('system-core:context/context.js').instanceForSystem.list.getSelected() || [];
             } catch (e) {
-                return document.querySelector('.wp-s-core-pan').__vue__.selectedList;
+                // 兜底分支自己也会抛（元素不存在时 __vue__ 为 undefined），必须再包一层。
+                try {
+                    return document.querySelector('.wp-s-core-pan')?.__vue__?.selectedList || [];
+                } catch (err) {
+                    return [];
+                }
             }
         },
 
@@ -1849,11 +1724,8 @@
             try {
                 return require('system-core:context/context.js').instanceForSystem.list.listData || [];
             } catch (e) {
-                try {
-                    return document.querySelector('.wp-s-core-pan').__vue__.fileList || [];
-                } catch (err) {
-                    return [];
-                }
+                // 与 getSelectedList 的兜底保持一致：元素或 __vue__ 不存在时用可选链，不再依赖内层 try/catch。
+                return document.querySelector('.wp-s-core-pan')?.__vue__?.fileList || [];
             }
         },
 
@@ -1902,60 +1774,6 @@
             return true;
         },
 
-        resolveFileItemFromDom(dom) {
-            const nameNode = dom.closest && dom.closest('.wp-s-pan-list__file-name');
-            const fileName = (nameNode?.innerText || dom.innerText || dom.getAttribute?.('title') || '').trim().replace(/\s+/g, ' ');
-            const list = this.getCurrentFileList();
-            const byName = list.find(v => {
-                const name = (v.server_filename || v.filename || '').trim().replace(/\s+/g, ' ');
-                return name && fileName && name === fileName;
-            });
-            if (byName) return byName;
-
-            const seen = new Set();
-            const scan = (value, depth = 0) => {
-                if (!value || depth > 6) return null;
-                if (typeof value !== 'object') return null;
-                if (seen.has(value)) return null;
-                seen.add(value);
-                if (Array.isArray(value)) {
-                    for (const item of value) {
-                        const found = scan(item, depth + 1);
-                        if (found) return found;
-                    }
-                    return null;
-                }
-                if (value.fs_id && (value.filename || value.server_filename)) {
-                    return value;
-                }
-                for (const key of Object.keys(value)) {
-                    const found = scan(value[key], depth + 1);
-                    if (found) return found;
-                }
-                return null;
-            };
-
-            const pool = [];
-            for (let node = dom; node; node = node.parentElement) {
-                try {
-                    const reactNode = this.findReact(node);
-                    reactNode && pool.push(reactNode);
-                } catch (e) {
-                }
-                for (const key of Object.keys(node)) {
-                    if (key.startsWith('__reactProps$') || key.startsWith('__reactFiber$')) {
-                        pool.push(node[key]);
-                    }
-                }
-            }
-            pool.push(dom);
-            for (const item of pool) {
-                const found = scan(item);
-                if (found) return found;
-            }
-            return null;
-        },
-
         getLogid() {
             try {
                 let ut = require("system-core:context/context.js").instanceForSystem.tools.baseService;
@@ -1966,11 +1784,19 @@
         },
 
         getShareData() {
-            let res = locals.dump();
+            // 分享页上下文缺失时 locals 可能不存在或结构变化，逐项兜底，
+            // 否则一个 TypeError 就会中断整个取链流程（调用方靠 params.bdstoken 判断成败）。
+            let res = {};
+            try {
+                res = (typeof locals?.dump === 'function' ? locals.dump() : locals) || {};
+            } catch (e) {
+                res = {};
+            }
+            const pick = (item) => item?.value ?? item ?? '';
             params.shareType = 'secret';
             params.sign = '';
             params.timestamp = '';
-            params.bdstoken = res.bdstoken.value;
+            params.bdstoken = pick(res.bdstoken) || this.getBdstoken();
             params.channel = 'chunlei';
             params.clienttype = 0;
             params.web = 1;
@@ -1978,10 +1804,11 @@
             params.encrypt = 0;
             params.product = 'share';
             params.logid = this.getLogid();
-            params.primaryid = res.shareid.value;
-            params.uk = res.share_uk.value;
+            params.primaryid = pick(res.shareid);
+            params.uk = pick(res.share_uk);
             params.shareType === 'secret' && (params.extra = this._getExtra());
             params.surl = this._getSurl();
+            return !!params.bdstoken;
         },
 
         detectPage() {
@@ -2005,8 +1832,6 @@
                 width,
                 padding: '15px 20px 5px',
                 customClass,
-            }).then(() => {
-                this._resetData();
             });
             if (downloadMode === 'aria') {
                 if (!clipboardText?.mac?.trim() || !clipboardText?.windows?.trim()) {
@@ -2016,7 +1841,8 @@
                 const result = this.copyAriaCommands(clipboardText);
                 if (result?.copied) {
                     const platformName = result.platform === 'windows' ? 'Windows' : 'Mac';
-                    message.success(`${platformName} aria2c 命令已复制到剪切板！`);
+                    // 命令里带 BDUSS，直链本身也带时效签名，复制成功时一并提醒用户。
+                    message.success(`${platformName} aria2c 命令已复制到剪贴板！命令含登录凭证且直链有时效，请尽快使用、请勿外发。`);
                 } else {
                     message.error('自动复制失败，请点击“复制全部链接”重试！');
                 }
@@ -2060,23 +1886,29 @@
             base.registerMenuCommand();
         },
 
-        async initAuthorize() {
-            let ins = setInterval(() => {
-                if (/openapi.baidu.com\/oauth\/2.0\/authorize/.test(location.href)) {
-                    let confirmButton = document.querySelector('#auth-allow');
+        initAuthorize() {
+            // 原实现从不 clearInterval：拿到 token 后若 window.close() 被浏览器拦截，
+            // 就会每 200ms 重复写入并反复尝试关闭页面，这里命中后立刻停表。
+            const timer = setInterval(() => {
+                if (/openapi\.baidu\.com\/oauth\/2\.0\/authorize/.test(location.href)) {
+                    const confirmButton = document.querySelector('#auth-allow');
                     if (confirmButton) {
                         confirmButton.click();
-                        return;
                     }
+                    return;
                 }
-                if (/openapi.baidu.com\/oauth\/2.0\/login_success/.test(location.href)) {
-                    if (location.href.includes('access_token')) {
-                        let token = location.href.match(/access_token=(.*?)&/)[1];
+                if (/openapi\.baidu\.com\/oauth\/2\.0\/login_success/.test(location.href)) {
+                    // token 可能落在 URL 末尾（后面没有 &），原来的 (.*?)& 会匹配失败并对 null 解包抛错。
+                    const token = location.href.match(/access_token=([^&#]+)/)?.[1];
+                    if (token) {
+                        clearInterval(timer);
                         base.setValue('baidu_access_token', token);
                         window.close();
                     }
                 }
             }, 200);
+            // 兜底：授权页始终没有进展时也要停掉轮询，避免标签页残留时后台空转。
+            setTimeout(() => clearInterval(timer), 60000);
         }
     };
 
