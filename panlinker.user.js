@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name              百度网盘助手
 // @namespace         https://github.com/syhyz1990/baiduyun
-// @version           1.0.31
+// @version           1.0.32
 // @author            Roc Deng
 // @description       支持批量获取百度网盘直链下载地址，脚本拉取文件后由浏览器保存。
 // @license           AGPL-3.0-or-later
